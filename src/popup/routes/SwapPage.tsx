@@ -205,6 +205,24 @@ function assetToSwapToken(asset: WalletAssetBalance): SwapToken {
   };
 }
 
+
+function readHideBalancesSetting(): boolean {
+  try {
+    const rawSettings = localStorage.getItem("settings");
+    const rawWalletState = localStorage.getItem("walletState");
+
+    const settings = rawSettings ? JSON.parse(rawSettings) : null;
+    const walletState = rawWalletState ? JSON.parse(rawWalletState) : null;
+
+    return (
+      settings?.hideBalances === true ||
+      walletState?.settings?.hideBalances === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 function formatTokenBalance(value: string): string {
   const numericValue = Number(value);
 
@@ -614,6 +632,7 @@ export function SwapPage({
   const [fromToken, setFromToken] = useState<SwapToken | null>(null);
   const [toToken, setToToken] = useState<SwapToken | null>(null);
   const [amount, setAmount] = useState("");
+  const hideBalances = readHideBalancesSetting();
   const [tokenPickerSide, setTokenPickerSide] =
     useState<TokenPickerSide | null>(null);
   const [isLoadingTokens, setIsLoadingTokens] = useState(true);
@@ -1331,7 +1350,7 @@ if (selectedAccount && fromToken && toToken) {
             <span>
               Balance:{" "}
               {fromToken
-                ? `${formatTokenBalance(fromToken.balance)} ${fromToken.symbol}`
+                ? `${hideBalances ? "••••" : formatTokenBalance(fromToken.balance)} ${fromToken.symbol}`
                 : "—"}
             </span>
           </div>
@@ -1373,7 +1392,7 @@ if (selectedAccount && fromToken && toToken) {
             <span>
               Balance:{" "}
               {toToken
-                ? `${formatTokenBalance(toToken.balance)} ${toToken.symbol}`
+                ? `${hideBalances ? "••••" : formatTokenBalance(toToken.balance)} ${toToken.symbol}`
                 : "—"}
             </span>
           </div>
@@ -1818,7 +1837,7 @@ if (selectedAccount && fromToken && toToken) {
                   </span>
 
                   <span className="swap-token-list-balance">
-                    {formatTokenBalance(token.balance)}
+                    {hideBalances ? "••••" : formatTokenBalance(token.balance)}
                   </span>
                 </button>
               ))}

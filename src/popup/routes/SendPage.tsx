@@ -122,6 +122,24 @@ function isPositiveAmount(value: string): boolean {
   return Number(normalizedValue) > 0;
 }
 
+
+function readHideBalancesSetting(): boolean {
+  try {
+    const rawSettings = localStorage.getItem("settings");
+    const rawWalletState = localStorage.getItem("walletState");
+
+    const settings = rawSettings ? JSON.parse(rawSettings) : null;
+    const walletState = rawWalletState ? JSON.parse(rawWalletState) : null;
+
+    return (
+      settings?.hideBalances === true ||
+      walletState?.settings?.hideBalances === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 function formatAssetBalance(asset: WalletAssetBalance): string {
   const value = Number(asset.formatted);
 
@@ -541,6 +559,7 @@ export function SendPage({
   const [nativeQuote, setNativeQuote] = useState<NativeAssetQuote | null>(null);
   const [sending, setSending] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
+  const hideBalances = readHideBalancesSetting();
   const [assetSelectorOpen, setAssetSelectorOpen] = useState(false);
   const [networkSelectorOpen, setNetworkSelectorOpen] = useState(false);
   const [currentChainId, setCurrentChainId] = useState(walletState.selectedChainId);
@@ -899,7 +918,7 @@ export function SendPage({
                 whiteSpace: "nowrap",
               }}
             >
-              Balance: {formatAssetBalance(selectedAsset)} {selectedAsset.symbol}
+              Balance: {hideBalances ? "••••" : formatAssetBalance(selectedAsset)} {selectedAsset.symbol}
             </div>
           </div>
         </section>
@@ -933,7 +952,7 @@ export function SendPage({
             </span>
 
             <span className="send-asset-card__balance">
-              <strong>{formatAssetBalance(selectedAsset)}</strong>
+              <strong>{hideBalances ? "••••" : formatAssetBalance(selectedAsset)}</strong>
               <small>{selectedAsset.symbol}</small>
             </span>
 
@@ -1290,7 +1309,7 @@ export function SendPage({
                     </div>
 
                     <div className="num">
-                      <div className="v">{formatAssetBalance(item)}</div>
+                      <div className="v">{hideBalances ? "••••" : formatAssetBalance(item)}</div>
                       <div
                         className="q"
                         style={active ? { color: "var(--secure)" } : undefined}
