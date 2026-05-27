@@ -728,21 +728,8 @@ export default function SecurityCenterPage({
     };
   }, [snapshot]);
 
-  const confirmSeedBackup = async () => {
-    const confirmed = window.confirm(
-      "Only confirm this if your recovery phrase is written down and stored safely offline.",
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const nextSnapshot = await updateSecuritySettings({
-      seedBackupConfirmed: true,
-      seedBackupConfirmedAt: new Date().toISOString(),
-    });
-
-    setSnapshot(mergeSnapshots(nextSnapshot, initialSnapshot));
+  const confirmSeedBackup = () => {
+    setShowSeedBackupVerification(true);
   };
 
   const handleSeedBackupVerified = async () => {

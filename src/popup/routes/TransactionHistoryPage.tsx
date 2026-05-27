@@ -363,6 +363,7 @@ export function TransactionHistoryPage({
     useState<TransactionHistoryItem | null>(null);
 
   const [items, setItems] = useState<TransactionHistoryItem[]>([]);
+  const [confirmClearHistoryOpen, setConfirmClearHistoryOpen] = useState(false);
 
   async function refresh() {
     if (!selectedAccount) {
@@ -410,16 +411,20 @@ export function TransactionHistoryPage({
     void refresh();
   }, [selectedAccount?.address, walletState.selectedChainId]);
 
-  function clearHistory() {
+    function clearHistory() {
     if (!selectedAccount) return;
 
-    const confirmed = window.confirm(
-      "Clear local transaction history for this account?",
-    );
+    setConfirmClearHistoryOpen(true);
+  }
 
-    if (!confirmed) return;
+  function executeClearHistory() {
+    if (!selectedAccount) {
+      setConfirmClearHistoryOpen(false);
+      return;
+    }
 
     transactionHistoryService.clearByAccount(selectedAccount.address);
+    setConfirmClearHistoryOpen(false);
     void refresh();
   }
 
@@ -654,6 +659,92 @@ export function TransactionHistoryPage({
           </section>
         </div>
       ) : null}
+        {confirmClearHistoryOpen ? (
+          <div
+            role="presentation"
+            onClick={() => setConfirmClearHistoryOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 80,
+              display: "grid",
+              alignItems: "end",
+              background: "rgba(0, 0, 0, 0.24)",
+              padding: "0 0 16px",
+              boxSizing: "border-box",
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-label="Clear transaction history confirmation"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                width: "100%",
+                maxWidth: 680,
+                margin: "0 auto",
+                padding: "0 12px",
+                boxSizing: "border-box",
+              }}
+            >
+              <div
+                style={{
+                  border: "1px solid var(--border, #dedede)",
+                  borderRadius: 24,
+                  background: "var(--bg, #ffffff)",
+                  boxShadow: "0 24px 80px rgba(0, 0, 0, 0.18)",
+                  padding: 18,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 18,
+                    lineHeight: "24px",
+                    fontWeight: 850,
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  Clear activity?
+                </div>
+
+                <p
+                  style={{
+                    margin: "8px 0 0",
+                    color: "var(--text-secondary, #777777)",
+                    fontSize: 13,
+                    lineHeight: "19px",
+                  }}
+                >
+                  This removes local transaction history for the selected account.
+                  On-chain transactions will still be visible in explorers.
+                </p>
+
+                <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
+                  <button
+                    type="button"
+                    className="btn primary lg full"
+                    onClick={executeClearHistory}
+                    style={{
+                      background: "#a23b2d",
+                      borderColor: "#a23b2d",
+                    }}
+                  >
+                    Clear activity
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn secondary lg full"
+                    onClick={() => setConfirmClearHistoryOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
     </div>
   );
 }

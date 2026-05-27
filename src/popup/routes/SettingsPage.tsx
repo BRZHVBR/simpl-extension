@@ -13,6 +13,9 @@ import { openFullscreenApp, openSidePanel } from "../surface-actions";
 
 import SecurityCenterPage from "./SecurityCenterPage";
 
+
+type SettingsConfirmAction = "clear-wallet" | null;
+
 type SettingsPageProps = {
   walletState: WalletState;
   onBack: () => void;
@@ -226,6 +229,7 @@ export function SettingsPage({
   onRevealSeed,
   onRevealPrivateKey,
 }: SettingsPageProps) {  const [showSecurityCenter, setShowSecurityCenter] = useState(false);
+  const [settingsConfirmAction, setSettingsConfirmAction] = useState<SettingsConfirmAction>(null);
 
   const [nativeStatus, setNativeStatus] = useState<string | null>(null);
   const [touchIdPassword, setTouchIdPassword] = useState("");
@@ -356,12 +360,12 @@ export function SettingsPage({
     await handleChanged();
   }
 
-  async function clearWallet() {
-    const confirmed = window.confirm(
-      "This will remove the encrypted vault and wallet state from this browser. Continue?",
-    );
+    async function clearWallet() {
+    setSettingsConfirmAction("clear-wallet");
+  }
 
-    if (!confirmed) return;
+  async function executeClearWallet() {
+    setSettingsConfirmAction(null);
 
     const credentialId =
       walletState.settings.biometricUnlock.credentialId ?? walletId;
@@ -386,6 +390,92 @@ export function SettingsPage({
   />
   ) : (
     <>
+
+      {settingsConfirmAction === "clear-wallet" ? (
+        <div
+          role="presentation"
+          onClick={() => setSettingsConfirmAction(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            display: "grid",
+            alignItems: "end",
+            background: "rgba(0, 0, 0, 0.24)",
+            padding: "0 0 16px",
+            boxSizing: "border-box",
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Clear wallet confirmation"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 680,
+              margin: "0 auto",
+              padding: "0 12px",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                border: "1px solid var(--border, #dedede)",
+                borderRadius: 24,
+                background: "var(--bg, #ffffff)",
+                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.18)",
+                padding: 18,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 18,
+                  lineHeight: "24px",
+                  fontWeight: 850,
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                Clear wallet?
+              </div>
+
+              <p
+                style={{
+                  margin: "8px 0 0",
+                  color: "var(--text-secondary, #777777)",
+                  fontSize: 13,
+                  lineHeight: "19px",
+                }}
+              >
+                This will remove the encrypted vault and wallet state from this browser.
+                Make sure your recovery phrase is safely backed up before continuing.
+              </p>
+
+              <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
+                <button
+                  type="button"
+                  className="btn primary lg full"
+                  onClick={() => void executeClearWallet()}
+                  style={{
+                    background: "#a23b2d",
+                    borderColor: "#a23b2d",
+                  }}
+                >
+                  Clear wallet
+                </button>
+
+                <button
+                  type="button"
+                  className="btn secondary lg full"
+                  onClick={() => setSettingsConfirmAction(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
     <div className="ext-popup" data-screen-label="08 Settings">
       <div className="bar-top">
