@@ -1034,6 +1034,12 @@ export default function WalletConnectPage({
         setPendingRequest(null);
         await clearPendingWalletConnectRequest();
         setStatus(`Transaction submitted: ${shortHash(result.hash)}`);
+
+        const searchParams = new URLSearchParams(window.location.search);
+        if (searchParams.get("surface") === "approval") {
+          window.setTimeout(() => window.close(), 700);
+        }
+
         return;
       }
 
@@ -1048,6 +1054,8 @@ export default function WalletConnectPage({
       await clearPendingWalletConnectRequest();
       setStatus(`${pendingRequest.method} was rejected because it is not supported yet.`);
     } catch (nextError) {
+      console.error("WalletConnect request approval failed:", nextError);
+
       setError(
         nextError instanceof Error
           ? nextError.message
@@ -1256,9 +1264,9 @@ export default function WalletConnectPage({
         <section
           style={{
             width: "100%",
-            maxWidth: 680,
+            maxWidth: 420,
             margin: "0 auto",
-            padding: "42px 12px 96px",
+            padding: "28px 18px 88px",
             boxSizing: "border-box",
           }}
         >
@@ -1279,8 +1287,8 @@ export default function WalletConnectPage({
           <h1
             style={{
               margin: "18px 0 0",
-              fontSize: 40,
-              lineHeight: "44px",
+              fontSize: 30,
+              lineHeight: "34px",
               letterSpacing: "-0.055em",
               fontWeight: 900,
             }}
@@ -1303,10 +1311,10 @@ export default function WalletConnectPage({
 
           <section
             style={{
-              marginTop: 28,
+              marginTop: 20,
               border: "1px solid var(--border, #dedede)",
-              borderRadius: 24,
-              padding: 18,
+              borderRadius: 20,
+              padding: 14,
             }}
           >
             <div
@@ -1329,10 +1337,10 @@ export default function WalletConnectPage({
                 <div
                   style={{
                     display: "grid",
-                    gap: 8,
+                    gap: 7,
                     border: "1px solid var(--border, #dedede)",
                     borderRadius: 14,
-                    padding: 12,
+                    padding: 10,
                     background: "#ffffff",
                   }}
                 >
@@ -1392,6 +1400,40 @@ export default function WalletConnectPage({
               </details>
             </div>
           </section>
+
+          {/* Approval status visible block */}
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 14,
+              background: "#f7f7f4",
+              color: "var(--text-secondary, #777777)",
+              fontSize: 12,
+              lineHeight: "17px",
+              wordBreak: "break-word",
+            }}
+          >
+            {status}
+          </div>
+
+          {error ? (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 12,
+                borderRadius: 14,
+                background: "#fff7f5",
+                color: "#a23b2d",
+                fontSize: 12,
+                lineHeight: "17px",
+                fontWeight: 750,
+                wordBreak: "break-word",
+              }}
+            >
+              {error}
+            </div>
+          ) : null}
 
           <div
             style={{
