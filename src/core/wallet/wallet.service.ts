@@ -1,6 +1,6 @@
 // src/core/wallet/wallet.service.ts
 
-import { JsonRpcProvider } from "ethers";
+import { JsonRpcProvider, Wallet, type TypedDataDomain, type TypedDataField } from "ethers";
 import { accountService } from "../accounts/account.service";
 import type {
   WalletAccount,
@@ -395,6 +395,93 @@ export class WalletService {
       chainId: walletState.selectedChainId,
       waitForReceipt: input.waitForReceipt,
     });
+  }
+
+  async signSelectedTypedDataV4(input: {
+    params: unknown;
+    password?: string;
+  }): Promise<{ signature: string }> {
+    const walletState = await this.storage.getWalletState();
+    const selectedAccount = this.getRequiredSelectedAccount(walletState);
+
+    if (selectedAccount.type === "watch") {
+      throw new Error("Watch-only wallet cannot sign messages.");
+    }
+
+    const params = Array.isArray(input.params) ? input.params : [];
+    const from = typeof params[0] === "string" ? params[0] : "";
+    const typedDataRaw = params[1];
+
+    if (!from) {
+      throw new Error("Typed data signer address is missing.");
+    }
+
+    if (from.toLowerCase() !== selectedAccount.address.toLowerCase()) {
+      throw new Error("Typed data signer does not match the selected SIMPLE account.");
+    }
+
+    const typedData =
+      typeof typedDataRaw === "string"
+        ? JSON.parse(typedDataRaw)
+        : typedDataRaw;
+
+    if (!typedData || typeof typedData !== "object") {
+      throw new Error("Typed data payload is invalid.");
+    }
+
+    const record = typedData as {
+      domain?: Record<string, unknown>;
+      types?: Record<string, Array<Record<string, unknown>>>;
+      message?: Record<string, unknown>;
+      primaryType?: string;
+    };
+
+    if (!record.domain || !record.types || !record.message) {
+      throw new Error("Typed data payload is missing domain, types or message.");
+    }
+
+    const { EIP712Domain: _domainType, ...rawTypes } = record.types;
+
+    const types: Record<string, TypedDataField[]> = {};
+
+    for (const [typeName, fields] of Object.entries(rawTypes)) {
+      if (!Array.isArray(fields)) {
+        throw new Error(`Typed data type ${typeName} is invalid.`);
+      }
+
+      types[typeName] = fields.map((field) => {
+        const fieldRecord = field as Record<string, unknown>;
+        const name = fieldRecord.name;
+        const type = fieldRecord.type;
+
+        if (typeof name !== "string" || !name) {
+          throw new Error(`Typed data field name is invalid in ${typeName}.`);
+        }
+
+        if (typeof type !== "string" || !type) {
+          throw new Error(`Typed data field type is invalid in ${typeName}.`);
+        }
+
+        return {
+          name,
+          type,
+        };
+      });
+    }
+
+    const mnemonic = await this.getMnemonicForSensitiveOperation(input.password);
+    const privateKey = deriveEvmPrivateKey(mnemonic, selectedAccount.index);
+    const signer = new Wallet(privateKey);
+
+    const signature = await signer.signTypedData(
+      record.domain as TypedDataDomain,
+      types,
+      record.message,
+    );
+
+    return {
+      signature,
+    };
   }
 
   async waitForSelectedTransaction(input: {

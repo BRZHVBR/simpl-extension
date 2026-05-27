@@ -728,6 +728,9 @@ function getApproveButtonLabel(method: string): string {
     case "eth_sendTransaction":
       return "Confirm transaction";
 
+    case "eth_signTypedData_v4":
+      return "Sign message";
+
     default:
       return "Approve";
   }
@@ -744,7 +747,11 @@ function canAutoRespondToMethod(method: string): boolean {
 }
 
 function canApprovePendingRequest(method: string): boolean {
-  return method === "wallet_switchEthereumChain" || method === "eth_sendTransaction";
+  return (
+    method === "wallet_switchEthereumChain" ||
+    method === "eth_sendTransaction" ||
+    method === "eth_signTypedData_v4"
+  );
 }
 
 function getPendingRequestActionLabel(method: string): string {
@@ -757,7 +764,7 @@ function getPendingRequestActionLabel(method: string): string {
     case "eth_signTypedData":
     case "eth_signTypedData_v3":
     case "eth_signTypedData_v4":
-      return "Signature approval is coming next";
+      return "Signature confirmation required";
 
     case "eth_sendTransaction":
       return "Transaction confirmation required";
@@ -1052,6 +1059,40 @@ export default function WalletConnectPage({
         return;
       }
 
+      if (pendingRequest.method === "eth_signTypedData_v4") {
+        const password = approvalPassword.trim();
+
+        if (!password) {
+          throw new Error("Wallet password is required.");
+        }
+
+        const result = await walletService.signSelectedTypedDataV4({
+          password,
+          params: pendingRequest.params,
+        });
+
+        await client.respondSessionRequest?.({
+          topic: pendingRequest.topic,
+          response: {
+            id: pendingRequest.id,
+            jsonrpc: "2.0",
+            result: result.signature,
+          },
+        });
+
+        setPendingRequest(null);
+        setApprovalPassword("");
+        await clearPendingWalletConnectRequest();
+        setStatus("Message signed.");
+
+        const searchParams = new URLSearchParams(window.location.search);
+        if (searchParams.get("surface") === "approval") {
+          window.setTimeout(() => window.close(), 700);
+        }
+
+        return;
+      }
+
       await respondUnsupported(
         client,
         pendingRequest.topic,
@@ -1305,7 +1346,9 @@ export default function WalletConnectPage({
           >
             {pendingRequest.method === "eth_sendTransaction"
               ? "Confirm transaction"
-              : "Confirm WalletConnect request"}
+              : pendingRequest.method === "eth_signTypedData_v4"
+                ? "Sign message"
+                : "Confirm WalletConnect request"}
           </h1>
 
           <p
@@ -1343,7 +1386,8 @@ export default function WalletConnectPage({
                 <strong>Status:</strong> {getPendingRequestActionLabel(pendingRequest.method)}
               </div>
 
-              {pendingRequest.method === "eth_sendTransaction" ? (
+              {pendingRequest.method === "eth_sendTransaction" ||
+          pendingRequest.method === "eth_signTypedData_v4" ? (
                 <div
                   style={{
                     display: "grid",
@@ -1412,7 +1456,8 @@ export default function WalletConnectPage({
           </section>
 
           {/* Approval password visible input */}
-          {pendingRequest.method === "eth_sendTransaction" ? (
+          {pendingRequest.method === "eth_sendTransaction" ||
+          pendingRequest.method === "eth_signTypedData_v4" ? (
             <label
               style={{
                 display: "grid",
@@ -1526,7 +1571,8 @@ export default function WalletConnectPage({
                 className="btn primary lg full"
                 disabled={
                   isResponding ||
-                  (pendingRequest.method === "eth_sendTransaction" && !approvalPassword.trim())
+                  (["eth_sendTransaction", "eth_signTypedData_v4"].includes(pendingRequest.method) &&
+                    !approvalPassword.trim())
                 }
                 onClick={() => void approvePendingRequest()}
               >
