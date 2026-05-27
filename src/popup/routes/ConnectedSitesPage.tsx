@@ -270,7 +270,6 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
           void refresh();
         }}
         onConnected={async () => {
-          setShowWalletConnect(false);
           await refresh();
         }}
       />
