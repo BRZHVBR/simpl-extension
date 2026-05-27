@@ -25,6 +25,7 @@ type SecurityCheck = {
 };
 
 const KEYCHAIN_HOST = "com.local_evm_wallet.keychain";
+const AUTO_LOCK_OPTIONS = [1, 5, 15, 30, 60] as const;
 
 function getChrome() {
   return (globalThis as unknown as { chrome?: any }).chrome;
@@ -623,6 +624,7 @@ export default function SecurityCenterPage({
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingKeychain, setIsCheckingKeychain] = useState(false);
   const [showSeedBackupVerification, setShowSeedBackupVerification] = useState(false);
+  const [isAutoLockSheetOpen, setIsAutoLockSheetOpen] = useState(false);
 
   useEffect(() => {
     pageRef.current?.scrollTo({ top: 0 });
@@ -769,26 +771,11 @@ export default function SecurityCenterPage({
     setIsCheckingKeychain(false);
   };
 
-  const changeAutoLock = async () => {
-    const current =
-      typeof securityState.autoLockMinutes === "number"
-        ? String(securityState.autoLockMinutes)
-        : "15";
+  const changeAutoLock = () => {
+    setIsAutoLockSheetOpen(true);
+  };
 
-    const value = window.prompt("Auto-lock minutes: 1, 5, 15, 30 or 60", current);
-
-    if (value == null) {
-      return;
-    }
-
-    const minutes = Number(value.trim());
-    const allowed = [1, 5, 15, 30, 60];
-
-    if (!allowed.includes(minutes)) {
-      window.alert("Use one of these values: 1, 5, 15, 30 or 60.");
-      return;
-    }
-
+  const applyAutoLock = async (minutes: number) => {
     const nextSnapshot = await updateRootSettings(
       {
         autoLockMinutes: minutes,
@@ -797,6 +784,7 @@ export default function SecurityCenterPage({
     );
 
     setSnapshot(nextSnapshot);
+    setIsAutoLockSheetOpen(false);
   };
 
   const toggleHideBalances = async () => {
@@ -1069,6 +1057,134 @@ export default function SecurityCenterPage({
           </p>
         </section>
       </section>
+
+      {isAutoLockSheetOpen ? (
+        <div
+          role="presentation"
+          onClick={() => setIsAutoLockSheetOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            display: "grid",
+            alignItems: "end",
+            background: "rgba(0, 0, 0, 0.24)",
+            padding: "0 0 16px",
+            boxSizing: "border-box",
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Auto-lock options"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 680,
+              margin: "0 auto",
+              padding: "0 12px",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                border: "1px solid var(--border, #dedede)",
+                borderRadius: 24,
+                background: "var(--bg, #ffffff)",
+                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.18)",
+                padding: 16,
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: 16,
+                  alignItems: "start",
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 18,
+                      lineHeight: "24px",
+                      fontWeight: 850,
+                      letterSpacing: "-0.02em",
+                    }}
+                  >
+                    Auto-lock
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 4,
+                      color: "var(--text-secondary, #777777)",
+                      fontSize: 13,
+                      lineHeight: "19px",
+                    }}
+                  >
+                    Choose when SIMPLE locks after inactivity.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  aria-label="Close auto-lock options"
+                  onClick={() => setIsAutoLockSheetOpen(false)}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    border: "1px solid var(--border, #dedede)",
+                    borderRadius: 999,
+                    background: "var(--bg, #ffffff)",
+                    color: "var(--text-primary, #111111)",
+                    cursor: "pointer",
+                    fontSize: 20,
+                    lineHeight: "20px",
+                    fontWeight: 700,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="row-list">
+                {AUTO_LOCK_OPTIONS.map((minutes) => {
+                  const selected = securityState.autoLockMinutes === minutes;
+
+                  return (
+                    <Row
+                      key={minutes}
+                      icon={<ShieldIcon />}
+                      title={`${minutes} min`}
+                      subtitle={
+                        minutes <= 5
+                          ? "Best for maximum protection."
+                          : minutes <= 15
+                            ? "Recommended for everyday use."
+                            : "More convenient, less strict."
+                      }
+                      value={selected ? "Selected" : "›"}
+                      valueColor={selected ? getStatusColor("secure") : undefined}
+                      onClick={() => applyAutoLock(minutes)}
+                    />
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                className="btn secondary lg full"
+                onClick={() => setIsAutoLockSheetOpen(false)}
+                style={{ marginTop: 12 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
