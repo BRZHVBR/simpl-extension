@@ -168,13 +168,32 @@ export function UnlockPage({
         return;
       }
 
-      const walletId =
-        biometricSettings.credentialId ?? getBiometricWalletId(walletState);
+      const fallbackWalletId = getBiometricWalletId(walletState);
+      const walletIds = Array.from(
+        new Set(
+          [
+            biometricSettings.credentialId,
+            fallbackWalletId,
+          ].filter((value): value is string => Boolean(value)),
+        ),
+      );
 
-      const response = await nativeMessagingClient.getVaultKey(walletId);
+      let response: Awaited<ReturnType<typeof nativeMessagingClient.getVaultKey>> | null = null;
+      let lastTouchIdError: string | undefined;
 
-      if (!response.ok) {
-        throw new Error(response.error);
+      for (const walletId of walletIds) {
+        const nextResponse = await nativeMessagingClient.getVaultKey(walletId);
+
+        if (nextResponse.ok) {
+          response = nextResponse;
+          break;
+        }
+
+        lastTouchIdError = nextResponse.error;
+      }
+
+      if (!response?.ok) {
+        throw new Error(lastTouchIdError ?? "Touch ID vault key is unavailable.");
       }
 
       const passwordFromKeychain = decodeSecretFromBase64(

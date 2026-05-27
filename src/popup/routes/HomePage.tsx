@@ -568,6 +568,7 @@ export function HomePage(props: HomePageProps) {
     );
   }
 
+  const hideBalances = props.walletState.settings.hideBalances;
   const visibleAssets = assets.filter((asset) => asset.visible);
   const tokenAssets = visibleAssets.filter((asset) => asset.type === "erc20");
 
@@ -616,7 +617,7 @@ export function HomePage(props: HomePageProps) {
           <div className="lbl">Total balance</div>
 
           <div className="val" style={{ fontSize: 34 }}>
-            {totalValueText}
+            {hideBalances ? "••••••" : totalValueText}
           </div>
 
           <div className="balance-toolbar">
@@ -740,14 +741,14 @@ export function HomePage(props: HomePageProps) {
 
                   <div className="sub">
                     <span style={{ fontFamily: "var(--font-mono)" }}>
-                      {formatAssetBalance(asset)} {asset.symbol}
+                      {hideBalances ? "••••" : formatAssetBalance(asset)} {asset.symbol}
                     </span>
                   </div>
                 </div>
 
                 <div className="num">
                   <div className="v">
-                    {formatValue(assetUsdValue, usdToEurRate, valuationCurrency)}
+                    {hideBalances ? "••••••" : formatValue(assetUsdValue, usdToEurRate, valuationCurrency)}
                   </div>
 
                   <div className="q">

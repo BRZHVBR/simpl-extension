@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { walletService } from "../../core/wallet/wallet.service";
 
+import SeedBackupVerificationPage from "./SeedBackupVerificationPage";
 type SecurityStatus = "secure" | "warning" | "danger" | "unknown";
 
 type Snapshot = Record<string, unknown>;
@@ -24,6 +25,7 @@ type SecurityCheck = {
 };
 
 const KEYCHAIN_HOST = "com.local_evm_wallet.keychain";
+const AUTO_LOCK_OPTIONS = [1, 5, 15, 30, 60] as const;
 
 function getChrome() {
   return (globalThis as unknown as { chrome?: any }).chrome;
@@ -621,6 +623,8 @@ export default function SecurityCenterPage({
   const [snapshot, setSnapshot] = useState<Snapshot>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingKeychain, setIsCheckingKeychain] = useState(false);
+  const [showSeedBackupVerification, setShowSeedBackupVerification] = useState(false);
+  const [isAutoLockSheetOpen, setIsAutoLockSheetOpen] = useState(false);
 
   useEffect(() => {
     pageRef.current?.scrollTo({ top: 0 });
@@ -687,6 +691,15 @@ export default function SecurityCenterPage({
       "__localStorage.settings.security.seedBackupConfirmed",
     ]);
 
+    const seedBackupVerified = firstBoolean(snapshot, [
+      "securitySettings.seedBackupVerified",
+      "settings.security.seedBackupVerified",
+      "walletState.settings.security.seedBackupVerified",
+      "seedBackupVerified",
+      "__localStorage.securitySettings.seedBackupVerified",
+      "__localStorage.settings.security.seedBackupVerified",
+    ]);
+
     const keychainStatus = firstString(snapshot, [
       "securitySettings.lastKeychainHostCheckStatus",
       "settings.security.lastKeychainHostCheckStatus",
@@ -709,26 +722,26 @@ export default function SecurityCenterPage({
       autoLockMinutes,
       touchIdEnabled,
       seedBackupConfirmed,
+      seedBackupVerified,
       keychainStatus,
       hideBalances,
     };
   }, [snapshot]);
 
-  const confirmSeedBackup = async () => {
-    const confirmed = window.confirm(
-      "Only confirm this if your recovery phrase is written down and stored safely offline.",
-    );
+  const confirmSeedBackup = () => {
+    setShowSeedBackupVerification(true);
+  };
 
-    if (!confirmed) {
-      return;
-    }
-
+  const handleSeedBackupVerified = async () => {
     const nextSnapshot = await updateSecuritySettings({
       seedBackupConfirmed: true,
       seedBackupConfirmedAt: new Date().toISOString(),
+      seedBackupVerified: true,
+      seedBackupVerifiedAt: new Date().toISOString(),
     });
 
     setSnapshot(mergeSnapshots(nextSnapshot, initialSnapshot));
+    setShowSeedBackupVerification(false);
   };
 
   const checkKeychainHost = async () => {
@@ -745,26 +758,11 @@ export default function SecurityCenterPage({
     setIsCheckingKeychain(false);
   };
 
-  const changeAutoLock = async () => {
-    const current =
-      typeof securityState.autoLockMinutes === "number"
-        ? String(securityState.autoLockMinutes)
-        : "15";
+  const changeAutoLock = () => {
+    setIsAutoLockSheetOpen(true);
+  };
 
-    const value = window.prompt("Auto-lock minutes: 1, 5, 15, 30 or 60", current);
-
-    if (value == null) {
-      return;
-    }
-
-    const minutes = Number(value.trim());
-    const allowed = [1, 5, 15, 30, 60];
-
-    if (!allowed.includes(minutes)) {
-      window.alert("Use one of these values: 1, 5, 15, 30 or 60.");
-      return;
-    }
-
+  const applyAutoLock = async (minutes: number) => {
     const nextSnapshot = await updateRootSettings(
       {
         autoLockMinutes: minutes,
@@ -773,6 +771,7 @@ export default function SecurityCenterPage({
     );
 
     setSnapshot(nextSnapshot);
+    setIsAutoLockSheetOpen(false);
   };
 
   const toggleHideBalances = async () => {
@@ -868,14 +867,16 @@ export default function SecurityCenterPage({
         id: "recovery-backup",
         title: "Recovery phrase backup",
         subtitle:
-          securityState.seedBackupConfirmed === true
-            ? "Recovery phrase backup was confirmed."
-            : "Confirm only after writing the recovery phrase down.",
-        status: securityState.seedBackupConfirmed === true ? "secure" : "warning",
-        value: securityState.seedBackupConfirmed === true ? "Verified" : "Review",
-        points: securityState.seedBackupConfirmed === true ? 20 : 0,
+          securityState.seedBackupVerified === true
+            ? "Recovery phrase backup was verified."
+            : securityState.seedBackupConfirmed === true
+              ? "Backup was confirmed, but word check is not completed."
+              : "Select random recovery words to verify backup.",
+        status: securityState.seedBackupVerified === true ? "secure" : "warning",
+        value: securityState.seedBackupVerified === true ? "Verified" : "Review",
+        points: securityState.seedBackupVerified === true ? 20 : 0,
         maxPoints: 20,
-        onClick: securityState.seedBackupConfirmed === true ? undefined : confirmSeedBackup,
+        onClick: () => setShowSeedBackupVerification(true),
       },
       {
         id: "keychain-host",
@@ -926,6 +927,39 @@ export default function SecurityCenterPage({
   const maxScore = checks.reduce((sum, check) => sum + check.maxPoints, 0);
   const normalizedScore = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
 
+  const checksById = new Map(checks.map((check) => [check.id, check]));
+
+  const deviceCheckIds = [
+    "encrypted-vault",
+    "auto-lock",
+    "touch-id",
+    "keychain-host",
+  ] as const;
+
+  const recoveryCheckIds = ["recovery-backup"] as const;
+  const privacyCheckIds = ["hide-balances"] as const;
+
+  const renderCheckRow = (check: SecurityCheck) => (
+    <Row
+      key={check.id}
+      icon={check.status === "secure" ? <ShieldIcon /> : <WarningIcon />}
+      title={check.title}
+      subtitle={check.subtitle}
+      value={check.value}
+      valueColor={getStatusColor(check.status)}
+      onClick={check.onClick}
+    />
+  );
+
+  if (showSeedBackupVerification) {
+    return (
+      <SeedBackupVerificationPage
+        onBack={() => setShowSeedBackupVerification(false)}
+        onVerified={handleSeedBackupVerified}
+      />
+    );
+  }
+
   return (
     <main ref={pageRef} style={styles.page}>
       <header style={styles.topbar}>
@@ -958,66 +992,13 @@ export default function SecurityCenterPage({
         </section>
 
         <section style={styles.section}>
-          <SectionLabel>Checks</SectionLabel>
+          <SectionLabel>Device security</SectionLabel>
 
           <div className="row-list">
-            {checks.map((check) => (
-              <Row
-                key={check.id}
-                icon={check.status === "secure" ? <ShieldIcon /> : <WarningIcon />}
-                title={check.title}
-                subtitle={check.subtitle}
-                value={check.value}
-                valueColor={getStatusColor(check.status)}
-                onClick={check.onClick}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section style={styles.section}>
-          <SectionLabel>Actions</SectionLabel>
-
-          <div className="row-list">
-            <Row
-              icon={<ShieldIcon />}
-              title="Change auto-lock"
-              subtitle={
-                typeof securityState.autoLockMinutes === "number"
-                  ? `Currently ${securityState.autoLockMinutes} min.`
-                  : "Choose wallet inactivity timeout."
-              }
-              value="›"
-              onClick={changeAutoLock}
-            />
-
-            <Row
-              icon={<ShieldIcon />}
-              title={securityState.hideBalances === true ? "Show balances" : "Hide balances"}
-              subtitle={
-                securityState.hideBalances === true
-                  ? "Balance privacy mode is enabled."
-                  : "Hide portfolio values on wallet screens."
-              }
-              value="›"
-              onClick={toggleHideBalances}
-            />
-
-            <Row
-              icon={<ShieldIcon />}
-              title={isCheckingKeychain ? "Checking Keychain Host" : "Check macOS Keychain Host"}
-              subtitle="Verify native Touch ID integration."
-              value="›"
-              onClick={isCheckingKeychain ? undefined : checkKeychainHost}
-            />
-
-            <Row
-              icon={<ShieldIcon />}
-              title="Confirm recovery backup"
-              subtitle="Mark recovery phrase as safely backed up."
-              value="›"
-              onClick={confirmSeedBackup}
-            />
+            {deviceCheckIds
+              .map((id) => checksById.get(id))
+              .filter((check): check is SecurityCheck => Boolean(check))
+              .map(renderCheckRow)}
 
             <Row
               icon={<ShieldIcon />}
@@ -1027,6 +1008,44 @@ export default function SecurityCenterPage({
               onClick={lockWallet}
             />
           </div>
+        </section>
+
+        <section style={styles.section}>
+          <SectionLabel>Recovery</SectionLabel>
+
+          <div className="row-list">
+            {recoveryCheckIds
+              .map((id) => checksById.get(id))
+              .filter((check): check is SecurityCheck => Boolean(check))
+              .map(renderCheckRow)}
+          </div>
+        </section>
+
+        <section style={styles.section}>
+          <SectionLabel>Privacy</SectionLabel>
+
+          <div className="row-list">
+            {privacyCheckIds
+              .map((id) => checksById.get(id))
+              .filter((check): check is SecurityCheck => Boolean(check))
+              .map(renderCheckRow)}
+
+            <Row
+              icon={<ShieldIcon />}
+              title="Connected sites"
+              subtitle="Review websites that can request wallet access."
+              value="Soon"
+              valueColor="var(--text-secondary, #777777)"
+            />
+
+            <Row
+              icon={<ShieldIcon />}
+              title="Token approvals"
+              subtitle="Review contract spending permissions."
+              value="Soon"
+              valueColor="var(--text-secondary, #777777)"
+            />
+          </div>
 
           <p style={styles.note}>
             Security Center never sends your seed phrase, private key, password or vault key to external services.
@@ -1034,6 +1053,134 @@ export default function SecurityCenterPage({
           </p>
         </section>
       </section>
+
+      {isAutoLockSheetOpen ? (
+        <div
+          role="presentation"
+          onClick={() => setIsAutoLockSheetOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            display: "grid",
+            alignItems: "end",
+            background: "rgba(0, 0, 0, 0.24)",
+            padding: "0 0 16px",
+            boxSizing: "border-box",
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Auto-lock options"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 680,
+              margin: "0 auto",
+              padding: "0 12px",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                border: "1px solid var(--border, #dedede)",
+                borderRadius: 24,
+                background: "var(--bg, #ffffff)",
+                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.18)",
+                padding: 16,
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: 16,
+                  alignItems: "start",
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 18,
+                      lineHeight: "24px",
+                      fontWeight: 850,
+                      letterSpacing: "-0.02em",
+                    }}
+                  >
+                    Auto-lock
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 4,
+                      color: "var(--text-secondary, #777777)",
+                      fontSize: 13,
+                      lineHeight: "19px",
+                    }}
+                  >
+                    Choose when SIMPLE locks after inactivity.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  aria-label="Close auto-lock options"
+                  onClick={() => setIsAutoLockSheetOpen(false)}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    border: "1px solid var(--border, #dedede)",
+                    borderRadius: 999,
+                    background: "var(--bg, #ffffff)",
+                    color: "var(--text-primary, #111111)",
+                    cursor: "pointer",
+                    fontSize: 20,
+                    lineHeight: "20px",
+                    fontWeight: 700,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="row-list">
+                {AUTO_LOCK_OPTIONS.map((minutes) => {
+                  const selected = securityState.autoLockMinutes === minutes;
+
+                  return (
+                    <Row
+                      key={minutes}
+                      icon={<ShieldIcon />}
+                      title={`${minutes} min`}
+                      subtitle={
+                        minutes <= 5
+                          ? "Best for maximum protection."
+                          : minutes <= 15
+                            ? "Recommended for everyday use."
+                            : "More convenient, less strict."
+                      }
+                      value={selected ? "Selected" : "›"}
+                      valueColor={selected ? getStatusColor("secure") : undefined}
+                      onClick={() => applyAutoLock(minutes)}
+                    />
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                className="btn secondary lg full"
+                onClick={() => setIsAutoLockSheetOpen(false)}
+                style={{ marginTop: 12 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
