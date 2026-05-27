@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import WalletConnectPage from "./WalletConnectPage";
 type ConnectedSite = {
   id: string;
   origin: string;
@@ -20,7 +21,7 @@ function BackIcon() {
 }
 
 function GlobeIcon() {
-  return (
+return (
     <svg
       viewBox="0 0 24 24"
       width="19"
@@ -222,6 +223,7 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
   const [sites, setSites] = useState<ConnectedSite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
+  const [showWalletConnect, setShowWalletConnect] = useState(false);
 
   const sortedSites = useMemo(() => {
     return [...sites].sort((left, right) => {
@@ -259,6 +261,21 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
   useEffect(() => {
     void refresh();
   }, []);
+
+  if (showWalletConnect) {
+    return (
+      <WalletConnectPage
+        onBack={() => {
+          setShowWalletConnect(false);
+          void refresh();
+        }}
+        onConnected={async () => {
+          setShowWalletConnect(false);
+          await refresh();
+        }}
+      />
+    );
+  }
 
   return (
     <main
@@ -359,6 +376,15 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
         >
           Review websites that can request wallet access from SIMPLE.
         </p>
+
+        <button
+          type="button"
+          className="btn primary lg full"
+          onClick={() => setShowWalletConnect(true)}
+          style={{ marginTop: 28 }}
+        >
+          Connect with WalletConnect
+        </button>
 
         <section style={{ marginTop: 36 }}>
           <div
