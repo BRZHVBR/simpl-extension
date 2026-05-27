@@ -169,14 +169,34 @@ async function markSeedBackupVerified() {
     seedBackupVerifiedAt: now,
   };
 
-  const stored = await chromeStorageGet(["securitySettings", "settings", "walletState"]);
+  const stored = await chromeStorageGet([
+    "securitySettings",
+    "settings",
+    "walletState",
+    "biometricUnlock",
+  ]);
 
   const currentSecuritySettings = asRecord(stored.securitySettings);
+
   const currentSettings = asRecord(stored.settings);
   const currentSettingsSecurity = asRecord(currentSettings.security);
+  const currentSettingsBiometricUnlock = asRecord(currentSettings.biometricUnlock);
+
   const currentWalletState = asRecord(stored.walletState);
   const currentWalletStateSettings = asRecord(currentWalletState.settings);
   const currentWalletStateSecurity = asRecord(currentWalletStateSettings.security);
+  const currentWalletStateBiometricUnlock = asRecord(
+    currentWalletStateSettings.biometricUnlock,
+  );
+
+  const topLevelBiometricUnlock = asRecord(stored.biometricUnlock);
+
+  const biometricUnlock =
+    Object.keys(currentSettingsBiometricUnlock).length > 0
+      ? currentSettingsBiometricUnlock
+      : Object.keys(currentWalletStateBiometricUnlock).length > 0
+        ? currentWalletStateBiometricUnlock
+        : topLevelBiometricUnlock;
 
   const nextSecuritySettings = {
     ...currentSecuritySettings,
@@ -184,8 +204,11 @@ async function markSeedBackupVerified() {
   };
 
   const nextSettings = {
+    ...currentWalletStateSettings,
     ...currentSettings,
+    ...(Object.keys(biometricUnlock).length > 0 ? { biometricUnlock } : {}),
     security: {
+      ...currentWalletStateSecurity,
       ...currentSettingsSecurity,
       ...patch,
     },
@@ -196,15 +219,16 @@ async function markSeedBackupVerified() {
     settings: nextSettings,
   };
 
+  if (Object.keys(biometricUnlock).length > 0) {
+    payload.biometricUnlock = biometricUnlock;
+  }
+
   if (Object.keys(currentWalletState).length > 0) {
     payload.walletState = {
       ...currentWalletState,
       settings: {
         ...currentWalletStateSettings,
-        security: {
-          ...currentWalletStateSecurity,
-          ...patch,
-        },
+        ...nextSettings,
       },
     };
   }
@@ -214,6 +238,10 @@ async function markSeedBackupVerified() {
   try {
     localStorage.setItem("securitySettings", JSON.stringify(nextSecuritySettings));
     localStorage.setItem("settings", JSON.stringify(nextSettings));
+
+    if (payload.biometricUnlock) {
+      localStorage.setItem("biometricUnlock", JSON.stringify(payload.biometricUnlock));
+    }
 
     if (payload.walletState) {
       localStorage.setItem("walletState", JSON.stringify(payload.walletState));
