@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
+import { walletService } from "../../core/wallet/wallet.service";
 type WalletConnectPageProps = {
   onBack: () => void;
   onConnected?: () => void | Promise<void>;
@@ -525,6 +526,116 @@ function getJsonRpcResult(method: string, snapshot: WalletSnapshot): unknown {
   }
 }
 
+type WalletConnectPreparedTransaction = {
+  to: string;
+  data?: string;
+  value?: string;
+  gas?: string;
+  gasPrice?: string;
+};
+
+function getFirstRequestParam(params: unknown): Record<string, unknown> {
+  if (Array.isArray(params)) {
+    return asRecord(params[0]);
+  }
+
+  return asRecord(params);
+}
+
+function getOptionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeWalletConnectTransaction(params: unknown): WalletConnectPreparedTransaction {
+  const tx = getFirstRequestParam(params);
+  const to = getOptionalString(tx, "to");
+
+  if (!to) {
+    throw new Error("Transaction target address is missing.");
+  }
+
+  const transaction: WalletConnectPreparedTransaction = {
+    to,
+  };
+
+  const data = getOptionalString(tx, "data");
+  const value = getOptionalString(tx, "value");
+  const gas = getOptionalString(tx, "gas");
+  const gasPrice = getOptionalString(tx, "gasPrice");
+
+  if (data) transaction.data = data;
+  if (value) transaction.value = value;
+  if (gas) transaction.gas = gas;
+  if (gasPrice) transaction.gasPrice = gasPrice;
+
+  return transaction;
+}
+
+function getWalletConnectTransactionChainId(params: unknown): number | null {
+  const tx = getFirstRequestParam(params);
+  const rawChainId = tx.chainId;
+
+  if (typeof rawChainId !== "string" && typeof rawChainId !== "number") {
+    return null;
+  }
+
+  const chainId =
+    typeof rawChainId === "number"
+      ? rawChainId
+      : rawChainId.toLowerCase().startsWith("0x")
+        ? Number.parseInt(rawChainId, 16)
+        : Number(rawChainId);
+
+  return Number.isFinite(chainId) && chainId > 0 ? chainId : null;
+}
+
+function getWalletConnectTransactionFrom(params: unknown): string | null {
+  const tx = getFirstRequestParam(params);
+  return getOptionalString(tx, "from") ?? null;
+}
+
+function assertTransactionFromMatchesWallet(params: unknown, snapshot: WalletSnapshot) {
+  const from = getWalletConnectTransactionFrom(params);
+
+  if (!from) {
+    return;
+  }
+
+  if (from.toLowerCase() !== snapshot.address.toLowerCase()) {
+    throw new Error("Transaction sender does not match the selected SIMPLE account.");
+  }
+}
+
+function shortHash(hash: string): string {
+  return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
+}
+
+function getTransactionPreviewValue(params: unknown, key: string): string {
+  const tx = getFirstRequestParam(params);
+  return getOptionalString(tx, key) ?? "—";
+}
+
+function getApproveButtonLabel(method: string): string {
+  switch (method) {
+    case "wallet_switchEthereumChain":
+      return "Approve network switch";
+
+    case "eth_sendTransaction":
+      return "Confirm transaction";
+
+    default:
+      return "Approve";
+  }
+}
+
 function canAutoRespondToMethod(method: string): boolean {
   return [
     "eth_requestAccounts",
@@ -536,7 +647,7 @@ function canAutoRespondToMethod(method: string): boolean {
 }
 
 function canApprovePendingRequest(method: string): boolean {
-  return method === "wallet_switchEthereumChain";
+  return method === "wallet_switchEthereumChain" || method === "eth_sendTransaction";
 }
 
 function getPendingRequestActionLabel(method: string): string {
@@ -552,7 +663,7 @@ function getPendingRequestActionLabel(method: string): string {
       return "Signature approval is coming next";
 
     case "eth_sendTransaction":
-      return "Transaction approval is coming next";
+      return "Transaction confirmation required";
 
     default:
       return "Unsupported request";
@@ -775,6 +886,39 @@ export default function WalletConnectPage({
         return;
       }
 
+      if (pendingRequest.method === "eth_sendTransaction") {
+        const snapshot = await readWalletSnapshot();
+        const requestedChainId = getWalletConnectTransactionChainId(pendingRequest.params);
+
+        if (requestedChainId && requestedChainId !== snapshot.chainId) {
+          await updateSelectedChainId(requestedChainId);
+        }
+
+        const nextSnapshot = await readWalletSnapshot();
+
+        assertTransactionFromMatchesWallet(pendingRequest.params, nextSnapshot);
+
+        const transaction = normalizeWalletConnectTransaction(pendingRequest.params);
+
+        const result = await walletService.sendSelectedPreparedTransaction({
+          transaction,
+        });
+
+        await client.respondSessionRequest?.({
+          topic: pendingRequest.topic,
+          response: {
+            id: pendingRequest.id,
+            jsonrpc: "2.0",
+            result: result.hash,
+          },
+        });
+
+        setWalletSnapshot(await readWalletSnapshot());
+        setPendingRequest(null);
+        setStatus(`Transaction submitted: ${shortHash(result.hash)}`);
+        return;
+      }
+
       await respondUnsupported(
         client,
         pendingRequest.topic,
@@ -916,6 +1060,260 @@ export default function WalletConnectPage({
       active = false;
     };
   }, []);
+
+  if (pendingRequest) {
+    return (
+      <main
+        style={{
+          height: "100vh",
+          minHeight: "100vh",
+          width: "100%",
+          overflowY: "auto",
+          overflowX: "hidden",
+          background: "var(--bg, #ffffff)",
+          color: "var(--text-primary, #111111)",
+        }}
+      >
+        <header
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 20,
+            height: 56,
+            borderBottom: "1px solid var(--border, #e8e8e8)",
+            background: "var(--bg, #ffffff)",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 680,
+              height: "100%",
+              margin: "0 auto",
+              padding: "0 12px",
+              boxSizing: "border-box",
+              display: "grid",
+              gridTemplateColumns: "44px 1fr 44px",
+              alignItems: "center",
+            }}
+          >
+            <button
+              type="button"
+              onClick={onBack}
+              aria-label="Back"
+              style={{
+                width: 36,
+                height: 36,
+                border: 0,
+                background: "transparent",
+                color: "var(--text-primary, #111111)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <BackIcon />
+            </button>
+
+            <div
+              style={{
+                fontSize: 15,
+                lineHeight: "20px",
+                fontWeight: 800,
+              }}
+            >
+              Confirm request
+            </div>
+
+            <div />
+          </div>
+        </header>
+
+        <section
+          style={{
+            width: "100%",
+            maxWidth: 680,
+            margin: "0 auto",
+            padding: "42px 12px 96px",
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 999,
+              background: "var(--text-primary, #111111)",
+              color: "#ffffff",
+              display: "grid",
+              placeItems: "center",
+            }}
+          >
+            <LinkIcon />
+          </div>
+
+          <h1
+            style={{
+              margin: "18px 0 0",
+              fontSize: 40,
+              lineHeight: "44px",
+              letterSpacing: "-0.055em",
+              fontWeight: 900,
+            }}
+          >
+            {pendingRequest.method === "eth_sendTransaction"
+              ? "Confirm transaction"
+              : "Confirm WalletConnect request"}
+          </h1>
+
+          <p
+            style={{
+              margin: "10px 0 0",
+              color: "var(--text-secondary, #777777)",
+              fontSize: 14,
+              lineHeight: "21px",
+            }}
+          >
+            A connected dApp is requesting an action from SIMPLE.
+          </p>
+
+          <section
+            style={{
+              marginTop: 28,
+              border: "1px solid var(--border, #dedede)",
+              borderRadius: 24,
+              padding: 18,
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                fontSize: 13,
+                lineHeight: "19px",
+              }}
+            >
+              <div>
+                <strong>Method:</strong> {pendingRequest.method}
+              </div>
+
+              <div>
+                <strong>Status:</strong> {getPendingRequestActionLabel(pendingRequest.method)}
+              </div>
+
+              {pendingRequest.method === "eth_sendTransaction" ? (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 8,
+                    border: "1px solid var(--border, #dedede)",
+                    borderRadius: 14,
+                    padding: 12,
+                    background: "#ffffff",
+                  }}
+                >
+                  <div style={{ fontWeight: 850 }}>Transaction preview</div>
+                  <div>
+                    <strong>From:</strong>{" "}
+                    {getTransactionPreviewValue(pendingRequest.params, "from")}
+                  </div>
+                  <div>
+                    <strong>To:</strong>{" "}
+                    {getTransactionPreviewValue(pendingRequest.params, "to")}
+                  </div>
+                  <div>
+                    <strong>Value:</strong>{" "}
+                    {getTransactionPreviewValue(pendingRequest.params, "value")}
+                  </div>
+                  <div>
+                    <strong>Gas:</strong>{" "}
+                    {getTransactionPreviewValue(pendingRequest.params, "gas")}
+                  </div>
+                  <div>
+                    <strong>Chain:</strong>{" "}
+                    {getWalletConnectTransactionChainId(pendingRequest.params) ?? "Selected network"}
+                  </div>
+                </div>
+              ) : null}
+
+              <details>
+                <summary
+                  style={{
+                    cursor: "pointer",
+                    fontWeight: 800,
+                    marginTop: 4,
+                  }}
+                >
+                  Raw request data
+                </summary>
+
+                <pre
+                  style={{
+                    margin: "10px 0 0",
+                    maxHeight: 220,
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    border: "1px solid var(--border, #dedede)",
+                    borderRadius: 14,
+                    padding: 12,
+                    background: "#f7f7f4",
+                    color: "var(--text-secondary, #777777)",
+                    fontSize: 12,
+                    lineHeight: "17px",
+                  }}
+                >
+                  {formatRequestParams(pendingRequest.params)}
+                </pre>
+              </details>
+            </div>
+          </section>
+
+          <div
+            style={{
+              position: "sticky",
+              bottom: 0,
+              display: "grid",
+              gap: 10,
+              marginTop: 18,
+              padding: "12px 0 0",
+              background: "var(--bg, #ffffff)",
+            }}
+          >
+            {canApprovePendingRequest(pendingRequest.method) ? (
+              <button
+                type="button"
+                className="btn primary lg full"
+                disabled={isResponding}
+                onClick={() => void approvePendingRequest()}
+              >
+                {isResponding
+                  ? "Confirming…"
+                  : getApproveButtonLabel(pendingRequest.method)}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn primary lg full"
+                disabled
+                title="This request type needs a dedicated approval screen."
+              >
+                Approval coming next
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="btn secondary lg full"
+              disabled={isResponding}
+              onClick={() => void rejectPendingRequest()}
+            >
+              {isResponding ? "Rejecting…" : "Reject"}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main
@@ -1089,121 +1487,6 @@ export default function WalletConnectPage({
           </div>
         ) : null}
 
-        {pendingRequest ? (
-          <section
-            style={{
-              marginTop: 28,
-              border: "1px solid var(--border, #dedede)",
-              borderRadius: 24,
-              padding: 18,
-            }}
-          >
-            <div
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 999,
-                background: "var(--text-primary, #111111)",
-                color: "#ffffff",
-                display: "grid",
-                placeItems: "center",
-              }}
-            >
-              <LinkIcon />
-            </div>
-
-            <div
-              style={{
-                marginTop: 16,
-                fontSize: 18,
-                lineHeight: "24px",
-                fontWeight: 850,
-                letterSpacing: "-0.02em",
-              }}
-            >
-              WalletConnect request
-            </div>
-
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: "var(--text-secondary, #777777)",
-                fontSize: 13,
-                lineHeight: "19px",
-              }}
-            >
-              A connected dApp is requesting an action from SIMPLE.
-            </p>
-
-            <div
-              style={{
-                marginTop: 16,
-                display: "grid",
-                gap: 10,
-                fontSize: 13,
-                lineHeight: "19px",
-              }}
-            >
-              <div>
-                <strong>Method:</strong> {pendingRequest.method}
-              </div>
-
-              <div>
-                <strong>Status:</strong> {getPendingRequestActionLabel(pendingRequest.method)}
-              </div>
-
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: 220,
-                  overflow: "auto",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  border: "1px solid var(--border, #dedede)",
-                  borderRadius: 14,
-                  padding: 12,
-                  background: "#f7f7f4",
-                  color: "var(--text-secondary, #777777)",
-                  fontSize: 12,
-                  lineHeight: "17px",
-                }}
-              >
-                {formatRequestParams(pendingRequest.params)}
-              </pre>
-            </div>
-
-            <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
-              {canApprovePendingRequest(pendingRequest.method) ? (
-                <button
-                  type="button"
-                  className="btn primary lg full"
-                  disabled={isResponding}
-                  onClick={() => void approvePendingRequest()}
-                >
-                  {isResponding ? "Approving…" : "Approve"}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn primary lg full"
-                  disabled
-                  title="This request type needs a dedicated approval screen."
-                >
-                  Approval coming next
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="btn secondary lg full"
-                disabled={isResponding}
-                onClick={() => void rejectPendingRequest()}
-              >
-                {isResponding ? "Rejecting…" : "Reject"}
-              </button>
-            </div>
-          </section>
-        ) : null}
 
         {site && proposal ? (
           <section
