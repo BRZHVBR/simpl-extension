@@ -232,6 +232,42 @@ async function clearPendingWalletConnectRequest() {
   }
 }
 
+function sendWalletConnectEngineMessage<TResponse = { ok?: boolean; error?: string }>(
+  message: Record<string, unknown>,
+): Promise<TResponse> {
+  return new Promise((resolve, reject) => {
+    const runtime = (globalThis as unknown as {
+      chrome?: {
+        runtime?: {
+          sendMessage?: (
+            message: unknown,
+            callback?: (response?: TResponse) => void,
+          ) => void;
+          lastError?: {
+            message?: string;
+          };
+        };
+      };
+    }).chrome?.runtime;
+
+    if (typeof runtime?.sendMessage !== "function") {
+      reject(new Error("Chrome runtime messaging is not available."));
+      return;
+    }
+
+    runtime.sendMessage(message, (response?: TResponse) => {
+      const lastError = runtime.lastError?.message;
+
+      if (lastError) {
+        reject(new Error(lastError));
+        return;
+      }
+
+      resolve(response as TResponse);
+    });
+  });
+}
+
 function openWalletConnectApprovalWindow() {
   const runtime = (globalThis as unknown as {
     chrome?: {
@@ -902,17 +938,24 @@ export default function WalletConnectPage({
 
     setIsPairing(true);
     setError(null);
-    setStatus("Waiting for session proposal…");
+    setStatus("Sending WalletConnect URI to SIMPLE engine…");
 
     try {
-      const snapshot = await readWalletSnapshot();
-      const client = await getClient();
+      const response = await sendWalletConnectEngineMessage<{
+        ok?: boolean;
+        error?: string;
+      }>({
+        type: "SIMPLE_WALLETCONNECT_PAIR",
+        uri: nextUri,
+      });
 
-      setWalletSnapshot(snapshot);
+      if (!response?.ok) {
+        throw new Error(response?.error ?? "WalletConnect pairing failed.");
+      }
 
-      await pairWalletKit(client, nextUri);
-
-      setStatus("Pairing started. Approve the session proposal when it appears.");
+      setUri("");
+      setStatus("WalletConnect pairing started. SIMPLE will approve the session automatically.");
+      await onConnected?.();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "WalletConnect pairing failed.");
       setStatus("WalletConnect pairing failed.");
@@ -988,121 +1031,46 @@ export default function WalletConnectPage({
     setStatus(`Approving ${pendingRequest.method}…`);
 
     try {
-      const client = await getClient();
-
-      if (pendingRequest.method === "wallet_switchEthereumChain") {
-        const chainId = extractSwitchChainId(pendingRequest.params);
-
-        await updateSelectedChainId(chainId);
-
-        await client.respondSessionRequest?.({
-          topic: pendingRequest.topic,
-          response: {
-            id: pendingRequest.id,
-            jsonrpc: "2.0",
-            result: null,
-          },
-        });
-
-        setWalletSnapshot(await readWalletSnapshot());
-        setPendingRequest(null);
-        await clearPendingWalletConnectRequest();
-        setStatus(`Network switched to chain ${chainId}.`);
-        return;
-      }
-
-      if (pendingRequest.method === "eth_sendTransaction") {
-        const password = approvalPassword.trim();
-
-        if (!password) {
-          throw new Error("Wallet password is required.");
-        }
-
-        const snapshot = await readWalletSnapshot();
-        const requestedChainId = getWalletConnectTransactionChainId(pendingRequest.params);
-
-        if (requestedChainId && requestedChainId !== snapshot.chainId) {
-          await updateSelectedChainId(requestedChainId);
-        }
-
-        const nextSnapshot = await readWalletSnapshot();
-
-        assertTransactionFromMatchesWallet(pendingRequest.params, nextSnapshot);
-
-        const transaction = normalizeWalletConnectTransaction(pendingRequest.params);
-
-        const result = await walletService.sendSelectedPreparedTransaction({
-          password,
-          transaction,
-        });
-
-        await client.respondSessionRequest?.({
-          topic: pendingRequest.topic,
-          response: {
-            id: pendingRequest.id,
-            jsonrpc: "2.0",
-            result: result.hash,
-          },
-        });
-
-        setWalletSnapshot(await readWalletSnapshot());
-        setPendingRequest(null);
-        setApprovalPassword("");
-        await clearPendingWalletConnectRequest();
-        setStatus(`Transaction submitted: ${shortHash(result.hash)}`);
-
-        const searchParams = new URLSearchParams(window.location.search);
-        if (searchParams.get("surface") === "approval") {
-          window.setTimeout(() => window.close(), 700);
-        }
-
-        return;
-      }
-
-      if (pendingRequest.method === "eth_signTypedData_v4") {
-        const password = approvalPassword.trim();
-
-        if (!password) {
-          throw new Error("Wallet password is required.");
-        }
-
-        const result = await walletService.signSelectedTypedDataV4({
-          password,
-          params: pendingRequest.params,
-        });
-
-        await client.respondSessionRequest?.({
-          topic: pendingRequest.topic,
-          response: {
-            id: pendingRequest.id,
-            jsonrpc: "2.0",
-            result: result.signature,
-          },
-        });
-
-        setPendingRequest(null);
-        setApprovalPassword("");
-        await clearPendingWalletConnectRequest();
-        setStatus("Message signed.");
-
-        const searchParams = new URLSearchParams(window.location.search);
-        if (searchParams.get("surface") === "approval") {
-          window.setTimeout(() => window.close(), 700);
-        }
-
-        return;
-      }
-
-      await respondUnsupported(
-        client,
-        pendingRequest.topic,
-        pendingRequest.id,
-        `${pendingRequest.method} approval is not supported yet.`,
+      const needsPassword = ["eth_sendTransaction", "eth_signTypedData_v4"].includes(
+        pendingRequest.method,
       );
 
+      const password = approvalPassword.trim();
+
+      if (needsPassword && !password) {
+        throw new Error("Wallet password is required.");
+      }
+
+      const response = await sendWalletConnectEngineMessage<{
+        ok?: boolean;
+        error?: string;
+        result?: unknown;
+      }>({
+        type: "SIMPLE_WALLETCONNECT_APPROVE_REQUEST",
+        requestId: pendingRequest.id,
+        password,
+      });
+
+      if (!response?.ok) {
+        throw new Error(response?.error ?? "WalletConnect request approval failed.");
+      }
+
       setPendingRequest(null);
+      setApprovalPassword("");
       await clearPendingWalletConnectRequest();
-      setStatus(`${pendingRequest.method} was rejected because it is not supported yet.`);
+
+      if (pendingRequest.method === "eth_sendTransaction") {
+        setStatus("Transaction submitted.");
+      } else if (pendingRequest.method === "eth_signTypedData_v4") {
+        setStatus("Message signed.");
+      } else {
+        setStatus("WalletConnect request approved.");
+      }
+
+      const searchParams = new URLSearchParams(window.location.search);
+      if (searchParams.get("surface") === "approval") {
+        window.setTimeout(() => window.close(), 700);
+      }
     } catch (nextError) {
       console.error("WalletConnect request approval failed:", nextError);
 
@@ -1124,27 +1092,30 @@ export default function WalletConnectPage({
 
     setIsResponding(true);
     setError(null);
-    setStatus(`Rejecting ${pendingRequest.method}…`);
+    setStatus("Rejecting WalletConnect request…");
 
     try {
-      const client = await getClient();
-
-      await client.respondSessionRequest?.({
-        topic: pendingRequest.topic,
-        response: {
-          id: pendingRequest.id,
-          jsonrpc: "2.0",
-          error: {
-            code: 4001,
-            message: "User rejected the request.",
-          },
-        },
+      const response = await sendWalletConnectEngineMessage<{
+        ok?: boolean;
+        error?: string;
+      }>({
+        type: "SIMPLE_WALLETCONNECT_REJECT_REQUEST",
+        requestId: pendingRequest.id,
       });
+
+      if (!response?.ok) {
+        throw new Error(response?.error ?? "WalletConnect request rejection failed.");
+      }
 
       setPendingRequest(null);
       setApprovalPassword("");
       await clearPendingWalletConnectRequest();
       setStatus("WalletConnect request rejected.");
+
+      const searchParams = new URLSearchParams(window.location.search);
+      if (searchParams.get("surface") === "approval") {
+        window.setTimeout(() => window.close(), 300);
+      }
     } catch (nextError) {
       setError(
         nextError instanceof Error
