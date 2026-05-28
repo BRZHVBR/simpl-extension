@@ -212,6 +212,40 @@ async function clearPendingWalletConnectRequest() {
   });
 }
 
+function buildEmptyWalletCapabilities(params: unknown): Record<string, unknown> {
+  if (!Array.isArray(params)) {
+    return {};
+  }
+
+  const maybeChains = params.find((item) => Array.isArray(item));
+
+  if (!Array.isArray(maybeChains)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    maybeChains
+      .filter((chainId): chainId is string => typeof chainId === "string" && chainId.length > 0)
+      .map((chainId) => [chainId, {}]),
+  );
+}
+
+async function respondWalletConnectSuccess(input: {
+  walletKit: any;
+  topic: string;
+  id: number;
+  result: unknown;
+}) {
+  await input.walletKit.respondSessionRequest?.({
+    topic: input.topic,
+    response: {
+      id: input.id,
+      jsonrpc: "2.0",
+      result: input.result,
+    },
+  });
+}
+
 function openApprovalWindow() {
   chrome.runtime.sendMessage(
     {
@@ -602,6 +636,25 @@ async function getWalletKit() {
     const params = request.params ?? [];
 
     if (!topic || !Number.isFinite(id) || !method) {
+      return;
+    }
+
+    if (method === "wallet_getCapabilities") {
+      await respondWalletConnectSuccess({
+        walletKit,
+        topic,
+        id,
+        result: buildEmptyWalletCapabilities(params),
+      });
+
+      await chromeStorageSet({
+        lastWalletConnectAutoResponse: {
+          method,
+          result: buildEmptyWalletCapabilities(params),
+          createdAt: new Date().toISOString(),
+        },
+      });
+
       return;
     }
 
