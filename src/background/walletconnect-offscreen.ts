@@ -2,7 +2,6 @@
 
 import { Core } from "@walletconnect/core";
 import { WalletKit } from "@reown/walletkit";
-import { buildApprovedNamespaces } from "@walletconnect/utils";
 import { walletService } from "../core/wallet/wallet.service";
 
 const PENDING_WALLETCONNECT_REQUEST_KEY = "pendingWalletConnectRequest";
@@ -21,7 +20,11 @@ const DEFAULT_METHODS = [
   "eth_signTypedData_v4",
   "wallet_switchEthereumChain",
   "wallet_addEthereumChain",
+  "wallet_watchAsset",
   "wallet_getCapabilities",
+  "wallet_sendCalls",
+  "wallet_getCallsStatus",
+  "wallet_showCallsStatus",
 ];
 
 const DEFAULT_EVENTS = ["accountsChanged", "chainChanged"];
@@ -269,26 +272,33 @@ async function buildNamespacesForProposal(proposal: any) {
   const chains = getRequestedEip155Chains(proposal);
   const methods = getRequestedMethods(proposal);
   const events = getRequestedEvents(proposal);
+  const accounts = chains.map((chain) => `${chain}:${selected.address}`);
 
-  console.log("SIMPLE WalletConnect proposal namespaces:", {
+  const namespaces = {
+    eip155: {
+      chains,
+      methods,
+      events,
+      accounts,
+    },
+  };
+
+  const debugPayload = {
     requiredNamespaces: proposal?.requiredNamespaces,
     optionalNamespaces: proposal?.optionalNamespaces,
-    approvedChains: chains,
-    approvedMethods: methods,
-    approvedEvents: events,
-  });
+    approvedNamespaces: namespaces,
+  };
 
-  return buildApprovedNamespaces({
-    proposal,
-    supportedNamespaces: {
-      eip155: {
-        chains,
-        methods,
-        events,
-        accounts: chains.map((chain) => `${chain}:${selected.address}`),
-      },
+  console.log("SIMPLE WalletConnect proposal namespaces:", debugPayload);
+
+  await chromeStorageSet({
+    lastWalletConnectProposalDebug: {
+      ...debugPayload,
+      createdAt: new Date().toISOString(),
     },
   });
+
+  return namespaces;
 }
 
 async function pairWalletKit(uri: string) {
@@ -453,6 +463,14 @@ async function getWalletKit() {
       console.error("WalletConnect session proposal approval failed:", {
         error,
         proposal: event?.params,
+      });
+
+      await chromeStorageSet({
+        lastWalletConnectProposalError: {
+          message: error instanceof Error ? error.message : String(error),
+          proposal: event?.params,
+          createdAt: new Date().toISOString(),
+        },
       });
 
       try {
