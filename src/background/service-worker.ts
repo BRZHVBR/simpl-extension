@@ -93,6 +93,49 @@ chrome.runtime.onMessage.addListener(
     _sender,
     sendResponse: (response?: unknown) => void,
   ) => {
+  if (message?.type === "SIMPLE_WALLETCONNECT_SET_SELECTED_CHAIN") {
+    const messageWithChainId = message as { chainId?: unknown };
+    const chainId = Number(messageWithChainId.chainId);
+
+    if (!Number.isInteger(chainId) || chainId <= 0) {
+      sendResponse({
+        ok: false,
+        error: `Invalid chainId: ${String(messageWithChainId.chainId)}`,
+      });
+
+      return true;
+    }
+
+    void walletService
+      .setSelectedChainId(chainId)
+      .then((walletState) => {
+        void chrome.storage.local.set({
+          lastWalletConnectSelectedChainSwitch: {
+            chainId,
+            selectedChainId: walletState.selectedChainId,
+            createdAt: new Date().toISOString(),
+          },
+        });
+
+        sendResponse({
+          ok: true,
+          result: {
+            chainId,
+            selectedChainId: walletState.selectedChainId,
+          },
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+    return true;
+  }
+
+
     if (message?.type !== "SIMPLE_OPEN_WALLETCONNECT_APPROVAL_WINDOW") {
       return false;
     }

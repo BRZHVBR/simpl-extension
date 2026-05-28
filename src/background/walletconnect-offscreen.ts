@@ -185,6 +185,43 @@ function parseEip155ChainId(chainId?: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+async function ensureWalletConnectRequestChainSelected(
+  chainNamespace?: string,
+): Promise<number | null> {
+  const chainId = parseEip155ChainId(chainNamespace);
+
+  if (!chainId) {
+    return null;
+  }
+
+  const response = await sendServiceWorkerMessage<{
+    ok?: boolean;
+    error?: string;
+    result?: unknown;
+  }>({
+    type: "SIMPLE_WALLETCONNECT_SET_SELECTED_CHAIN",
+    chainId,
+  });
+
+  if (!response?.ok) {
+    throw new Error(
+      response?.error ?? `Failed to switch SIMPLE to WalletConnect chain ${chainId}.`,
+    );
+  }
+
+  await chromeStorageSet({
+    lastWalletConnectNetworkAwareSwitch: {
+      chainId,
+      chainNamespace,
+      result: response.result,
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  return chainId;
+}
+
+
 function parseWalletWatchAssetRequest(params: unknown, chainNamespace?: string): WatchedAsset {
   const request = Array.isArray(params) ? asRecord(params[0]) : asRecord(params);
   const type = getOptionalString(request, "type") ?? "ERC20";
@@ -542,6 +579,22 @@ async function approvePendingWalletConnectRequest(password?: string) {
   }
 
   if (pendingRequest.method === "eth_sendTransaction") {
+    const walletConnectTxChainId = await ensureWalletConnectRequestChainSelected(
+      pendingRequest.chainId,
+    );
+
+    await chromeStorageSet({
+      lastWalletConnectTxDebug: {
+        step: "SIMPLE_WC_NETWORK_AWARE_TX_CHAIN",
+        method: pendingRequest.method,
+        topic: pendingRequest.topic,
+        id: pendingRequest.id,
+        chainNamespace: pendingRequest.chainId,
+        chainId: walletConnectTxChainId,
+        params: pendingRequest.params,
+        createdAt: new Date().toISOString(),
+      },
+    });
     if (!password?.trim()) {
       throw new Error("Wallet password is required.");
     }

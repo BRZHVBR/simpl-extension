@@ -824,6 +824,34 @@ function formatRequestParams(params: unknown): string {
   }
 }
 
+function parseWalletConnectChainIdForUi(chainNamespace?: string) {
+  if (!chainNamespace?.startsWith("eip155:")) {
+    return null;
+  }
+
+  const parsed = Number(chainNamespace.slice("eip155:".length));
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getWalletConnectChainDisplayNameForUi(chainNamespace?: string) {
+  const chainId = parseWalletConnectChainIdForUi(chainNamespace);
+
+  switch (chainId) {
+    case 1:
+      return "Ethereum";
+    case 56:
+      return "BNB Smart Chain";
+    case 8453:
+      return "Base";
+    case 11155111:
+      return "Sepolia";
+    default:
+      return chainId ? `Chain ${chainId}` : null;
+  }
+}
+
+
 function simpleDecodeHexUtf8(value: string) {
   const hex = value.startsWith("0x") ? value.slice(2) : value;
 
@@ -1658,6 +1686,12 @@ export default function WalletConnectPage({
 
   if (pendingRequest) {
     const method = pendingRequest.method;
+    const requestedWalletConnectChainName =
+      getWalletConnectChainDisplayNameForUi(
+        (pendingRequest as { chainId?: string }).chainId,
+      );
+    const shouldShowNetworkSwitchNotice =
+      method === "eth_sendTransaction" && Boolean(requestedWalletConnectChainName);
 
     const requiresPassword =
       method === "eth_sendTransaction" ||
@@ -1708,6 +1742,13 @@ export default function WalletConnectPage({
     );
 
     const previewText = approvalView.previewText;
+    const txPreviewText =
+      method === "eth_sendTransaction" && requestedWalletConnectChainName
+        ? previewText.replace(
+            "Chain: Selected network",
+            `Chain: ${requestedWalletConnectChainName}`,
+          )
+        : previewText;
 
     return (
       <main
@@ -1892,7 +1933,7 @@ export default function WalletConnectPage({
                   lineHeight: "18px",
                 }}
               >
-                {String(previewText).trim() ||
+                {String(txPreviewText).trim() ||
                   "No readable preview available. Expand Raw request data below."}
               </pre>
             </div>
@@ -2054,6 +2095,24 @@ export default function WalletConnectPage({
                 Sign becomes available after entering your wallet password.
               </span>
             </label>
+          ) : null}
+
+          {shouldShowNetworkSwitchNotice ? (
+            <div
+              style={{
+                borderRadius: 14,
+                background: "#fff8df",
+                color: "#6c4b00",
+                padding: "10px 12px",
+                fontSize: 12,
+                lineHeight: "17px",
+                fontWeight: 750,
+                border: "1px solid #f2df9b",
+              }}
+            >
+              SIMPLE will switch to {requestedWalletConnectChainName} before
+              sending this transaction.
+            </div>
           ) : null}
 
           <div
