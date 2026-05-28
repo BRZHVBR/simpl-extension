@@ -824,6 +824,69 @@ function formatRequestParams(params: unknown): string {
   }
 }
 
+function decodeHexUtf8Preview(value: string) {
+  const normalized = value.startsWith("0x") ? value.slice(2) : value;
+
+  if (!normalized || normalized.length % 2 !== 0) {
+    return value;
+  }
+
+  try {
+    const bytes = normalized.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? [];
+
+    if (bytes.some((byte) => Number.isNaN(byte))) {
+      return value;
+    }
+
+    const decoded = new TextDecoder()
+      .decode(new Uint8Array(bytes))
+      .replace(/\u0000/g, "")
+      .trim();
+
+    return decoded || value;
+  } catch {
+    return value;
+  }
+}
+
+function formatPersonalSignPreview(params: unknown) {
+  const values = Array.isArray(params) ? params : [];
+
+  const stringValues = values.filter(
+    (value): value is string => typeof value === "string",
+  );
+
+  const hexMessage =
+    stringValues.find((value) => value.startsWith("0x") && value.length > 10) ??
+    stringValues[0];
+
+  if (!hexMessage) {
+    return formatRequestParams(params);
+  }
+
+  const decoded = hexMessage.startsWith("0x")
+    ? decodeHexUtf8Preview(hexMessage)
+    : hexMessage;
+
+  return decoded;
+}
+
+function formatTypedDataPreview(params: unknown) {
+  const values = Array.isArray(params) ? params : [];
+  const typedData = values.length > 1 ? values[1] : values[0];
+
+  if (typeof typedData === "string") {
+    try {
+      return JSON.stringify(JSON.parse(typedData), null, 2);
+    } catch {
+      return typedData;
+    }
+  }
+
+  return formatRequestParams(typedData ?? params);
+}
+
+
 function extractSwitchChainId(params: unknown): number {
   const firstParam = Array.isArray(params) ? params[0] : params;
   const record = asRecord(firstParam);
@@ -1191,18 +1254,22 @@ export default function WalletConnectPage({
           : "Request preview";
 
     const previewText =
-      method === "eth_sendTransaction"
-        ? [
-            `From: ${getTransactionPreviewValue(pendingRequest.params, "from")}`,
-            `To: ${getTransactionPreviewValue(pendingRequest.params, "to")}`,
-            `Value: ${getTransactionPreviewValue(pendingRequest.params, "value")}`,
-            `Gas: ${getTransactionPreviewValue(pendingRequest.params, "gas")}`,
-            `Chain: ${
-              getWalletConnectTransactionChainId(pendingRequest.params) ??
-              "Selected network"
-            }`,
-          ].join("\\n")
-        : formatRequestParams(pendingRequest.params);
+      method === "personal_sign"
+        ? formatPersonalSignPreview(pendingRequest.params)
+        : method === "eth_signTypedData_v4"
+          ? formatTypedDataPreview(pendingRequest.params)
+          : method === "eth_sendTransaction"
+            ? [
+                `From: ${getTransactionPreviewValue(pendingRequest.params, "from")}`,
+                `To: ${getTransactionPreviewValue(pendingRequest.params, "to")}`,
+                `Value: ${getTransactionPreviewValue(pendingRequest.params, "value")}`,
+                `Gas: ${getTransactionPreviewValue(pendingRequest.params, "gas")}`,
+                `Chain: ${
+                  getWalletConnectTransactionChainId(pendingRequest.params) ??
+                  "Selected network"
+                }`,
+              ].join("\\n")
+            : formatRequestParams(pendingRequest.params);
 
     return (
       <main
@@ -1375,7 +1442,7 @@ export default function WalletConnectPage({
               <pre
                 style={{
                   margin: 0,
-                  maxHeight: 76,
+                  maxHeight: 88,
                   overflowY: "auto",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
