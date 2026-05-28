@@ -996,6 +996,112 @@ function getWcPreviewTextV2(method: string, params: unknown) {
   return formatRequestParams(params);
 }
 
+type WalletConnectApprovalView = {
+  title: string;
+  description: string;
+  status: string;
+  previewTitle: string;
+  previewText: string;
+  primaryLabel: string;
+  requiresPassword: boolean;
+};
+
+function getWalletConnectApprovalView(
+  method: string,
+  params: unknown,
+): WalletConnectApprovalView {
+  switch (method) {
+    case "personal_sign":
+      return {
+        title: "Sign message",
+        description: "A connected dApp is requesting a message signature from SIMPLE.",
+        status: "Signature confirmation required",
+        previewTitle: "Message preview",
+        previewText: getWcPreviewTextV2(method, params),
+        primaryLabel: "Sign",
+        requiresPassword: true,
+      };
+
+    case "eth_signTypedData_v4":
+      return {
+        title: "Sign typed data",
+        description: "A connected dApp is requesting a typed data signature from SIMPLE.",
+        status: "Typed data signature required",
+        previewTitle: "Typed data preview",
+        previewText: getWcPreviewTextV2(method, params),
+        primaryLabel: "Sign",
+        requiresPassword: true,
+      };
+
+    case "eth_sendTransaction":
+      return {
+        title: "Confirm transaction",
+        description: "A connected dApp is requesting a transaction from SIMPLE.",
+        status: "Transaction confirmation required",
+        previewTitle: "Transaction preview",
+        previewText: getWcPreviewTextV2(method, params),
+        primaryLabel: "Confirm transaction",
+        requiresPassword: true,
+      };
+
+    case "wallet_watchAsset":
+      return {
+        title: "Add token",
+        description: "A connected dApp is requesting to add a token to SIMPLE.",
+        status: "Token add request",
+        previewTitle: "Token preview",
+        previewText: formatRequestParams(params),
+        primaryLabel: "Add token",
+        requiresPassword: false,
+      };
+
+    case "wallet_switchEthereumChain":
+      return {
+        title: "Switch network",
+        description: "A connected dApp is requesting to switch the active network.",
+        status: "Network switch request",
+        previewTitle: "Network preview",
+        previewText: formatRequestParams(params),
+        primaryLabel: "Switch network",
+        requiresPassword: false,
+      };
+
+    case "wallet_addEthereumChain":
+      return {
+        title: "Add network",
+        description: "A connected dApp is requesting to add a new network.",
+        status: "Network add request",
+        previewTitle: "Network preview",
+        previewText: formatRequestParams(params),
+        primaryLabel: "Add network",
+        requiresPassword: false,
+      };
+
+    case "wallet_getCapabilities":
+      return {
+        title: "Wallet capabilities",
+        description: "A connected dApp is requesting wallet capability information.",
+        status: "Capability request",
+        previewTitle: "Request preview",
+        previewText: formatRequestParams(params),
+        primaryLabel: "Approve",
+        requiresPassword: false,
+      };
+
+    default:
+      return {
+        title: "Confirm WalletConnect request",
+        description: "A connected dApp is requesting an action from SIMPLE.",
+        status: "Unsupported or unknown request",
+        previewTitle: "Request preview",
+        previewText: formatRequestParams(params),
+        primaryLabel: "Approve",
+        requiresPassword: false,
+      };
+  }
+}
+
+
 
 function isHexAddress(value: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(value);
@@ -1596,7 +1702,12 @@ export default function WalletConnectPage({
           ? "Transaction preview"
           : "Request preview";
 
-    const previewText = getWcPreviewTextV2(method, pendingRequest.params);
+    const approvalView = getWalletConnectApprovalView(
+      method,
+      pendingRequest.params,
+    );
+
+    const previewText = approvalView.previewText;
 
     return (
       <main
@@ -1710,7 +1821,7 @@ export default function WalletConnectPage({
                   lineHeight: "19px",
                 }}
               >
-                A connected dApp is requesting an action from SIMPLE.
+                {approvalView.description}
               </p>
             </div>
           </div>
@@ -1740,7 +1851,7 @@ export default function WalletConnectPage({
                 <strong>Method:</strong> {method}
               </div>
               <div>
-                <strong>Status:</strong> {statusLabel}
+                <strong>Status:</strong> {approvalView.status}
               </div>
             </div>
 
@@ -1763,7 +1874,7 @@ export default function WalletConnectPage({
                   letterSpacing: "-0.01em",
                 }}
               >
-                {previewTitle}
+                {approvalView.previewTitle}
               </div>
 
               <pre
