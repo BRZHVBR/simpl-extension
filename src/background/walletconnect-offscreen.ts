@@ -8,18 +8,23 @@ import { walletService } from "../core/wallet/wallet.service";
 const PENDING_WALLETCONNECT_REQUEST_KEY = "pendingWalletConnectRequest";
 const CONNECTED_SITES_KEY = "connectedSites";
 
-const SUPPORTED_EIP155_CHAINS = ["eip155:1", "eip155:56", "eip155:8453", "eip155:11155111"];
+const DEFAULT_EIP155_CHAINS = ["eip155:1", "eip155:56", "eip155:8453", "eip155:11155111"];
 
-const SUPPORTED_METHODS = [
+const DEFAULT_METHODS = [
+  "eth_accounts",
+  "eth_requestAccounts",
   "eth_sendTransaction",
   "personal_sign",
+  "eth_sign",
   "eth_signTypedData",
+  "eth_signTypedData_v3",
   "eth_signTypedData_v4",
   "wallet_switchEthereumChain",
+  "wallet_addEthereumChain",
   "wallet_getCapabilities",
 ];
 
-const SUPPORTED_EVENTS = ["accountsChanged", "chainChanged"];
+const DEFAULT_EVENTS = ["accountsChanged", "chainChanged"];
 
 type WalletConnectPendingRequest = {
   topic: string;
@@ -220,17 +225,67 @@ async function getSelectedWalletAccount() {
   };
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => typeof value === "string" && value.length > 0)));
+}
+
+function getRequestedNamespaceValues(
+  proposal: any,
+  key: "chains" | "methods" | "events",
+): string[] {
+  const required = proposal?.requiredNamespaces?.eip155?.[key];
+  const optional = proposal?.optionalNamespaces?.eip155?.[key];
+
+  return uniqueStrings([
+    ...(Array.isArray(required) ? required : []),
+    ...(Array.isArray(optional) ? optional : []),
+  ]);
+}
+
+function getRequestedEip155Chains(proposal: any): string[] {
+  const chains = getRequestedNamespaceValues(proposal, "chains").filter((chain) =>
+    chain.startsWith("eip155:"),
+  );
+
+  return chains.length > 0 ? chains : DEFAULT_EIP155_CHAINS;
+}
+
+function getRequestedMethods(proposal: any): string[] {
+  return uniqueStrings([
+    ...DEFAULT_METHODS,
+    ...getRequestedNamespaceValues(proposal, "methods"),
+  ]);
+}
+
+function getRequestedEvents(proposal: any): string[] {
+  return uniqueStrings([
+    ...DEFAULT_EVENTS,
+    ...getRequestedNamespaceValues(proposal, "events"),
+  ]);
+}
+
 async function buildNamespacesForProposal(proposal: any) {
   const selected = await getSelectedWalletAccount();
+  const chains = getRequestedEip155Chains(proposal);
+  const methods = getRequestedMethods(proposal);
+  const events = getRequestedEvents(proposal);
+
+  console.log("SIMPLE WalletConnect proposal namespaces:", {
+    requiredNamespaces: proposal?.requiredNamespaces,
+    optionalNamespaces: proposal?.optionalNamespaces,
+    approvedChains: chains,
+    approvedMethods: methods,
+    approvedEvents: events,
+  });
 
   return buildApprovedNamespaces({
     proposal,
     supportedNamespaces: {
       eip155: {
-        chains: SUPPORTED_EIP155_CHAINS,
-        methods: SUPPORTED_METHODS,
-        events: SUPPORTED_EVENTS,
-        accounts: SUPPORTED_EIP155_CHAINS.map((chain) => `${chain}:${selected.address}`),
+        chains,
+        methods,
+        events,
+        accounts: chains.map((chain) => `${chain}:${selected.address}`),
       },
     },
   });
@@ -395,7 +450,10 @@ async function getWalletKit() {
 
       console.log("SIMPLE WalletConnect session approved by offscreen engine.");
     } catch (error) {
-      console.error("WalletConnect session proposal approval failed:", error);
+      console.error("WalletConnect session proposal approval failed:", {
+        error,
+        proposal: event?.params,
+      });
 
       try {
         await (walletKit as any).rejectSession?.({
