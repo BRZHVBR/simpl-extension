@@ -1207,9 +1207,11 @@ export default function WalletConnectPage({
     return (
       <main
         style={{
+          position: "fixed",
+          inset: 0,
           height: "100dvh",
           minHeight: "100dvh",
-          width: "100%",
+          width: "100vw",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -1228,6 +1230,7 @@ export default function WalletConnectPage({
             padding: "0 16px",
             borderBottom: "1px solid #e7e5df",
             background: "#f7f7f4",
+            width: "100%",
             boxSizing: "border-box",
           }}
         >
@@ -1267,7 +1270,8 @@ export default function WalletConnectPage({
             flex: 1,
             minHeight: 0,
             overflowY: "auto",
-            padding: "18px 16px 150px",
+            padding: "16px 16px 148px",
+            width: "100%",
             display: "grid",
             gap: 14,
             alignContent: "start",
@@ -1295,8 +1299,8 @@ export default function WalletConnectPage({
               <h1
                 style={{
                   margin: 0,
-                  fontSize: 26,
-                  lineHeight: "29px",
+                  fontSize: 25,
+                  lineHeight: "28px",
                   letterSpacing: "-0.055em",
                   fontWeight: 880,
                 }}
@@ -1320,9 +1324,9 @@ export default function WalletConnectPage({
           <div
             style={{
               border: "1px solid #dfddd6",
-              borderRadius: 18,
+              borderRadius: 17,
               background: "#ffffff",
-              padding: 14,
+              padding: 13,
               width: "100%",
               display: "grid",
               gap: 14,
@@ -1371,7 +1375,7 @@ export default function WalletConnectPage({
               <pre
                 style={{
                   margin: 0,
-                  maxHeight: 104,
+                  maxHeight: 92,
                   overflowY: "auto",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
@@ -1492,6 +1496,7 @@ export default function WalletConnectPage({
             borderTop: "1px solid #e7e5df",
             background: "#f7f7f4",
             padding: "12px 16px 16px",
+            width: "100%",
             display: "grid",
             gap: 10,
             boxSizing: "border-box",
@@ -1726,8 +1731,8 @@ export default function WalletConnectPage({
           >
             <div
               style={{
-                width: 44,
-                height: 44,
+                width: 42,
+                height: 42,
                 borderRadius: 999,
                 background: "var(--text-primary, #111111)",
                 color: "#ffffff",
