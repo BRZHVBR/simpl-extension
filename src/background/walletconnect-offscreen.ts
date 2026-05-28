@@ -304,15 +304,41 @@ async function buildNamespacesForProposal(proposal: any) {
 async function pairWalletKit(uri: string) {
   const walletKit = await getWalletKit();
 
-  if (typeof (walletKit as any).pair === "function") {
-    await (walletKit as any).pair({ uri });
-    return;
-  }
+  await chromeStorageSet({
+    lastWalletConnectPairDebug: {
+      stage: "before_pair",
+      uriPrefix: uri.slice(0, 32),
+      createdAt: new Date().toISOString(),
+    },
+  });
 
   const pair = (walletKit as any).core?.pairing?.pair;
 
   if (typeof pair === "function") {
     await pair.call((walletKit as any).core?.pairing, { uri });
+
+    await chromeStorageSet({
+      lastWalletConnectPairDebug: {
+        stage: "after_core_pair",
+        uriPrefix: uri.slice(0, 32),
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    return;
+  }
+
+  if (typeof (walletKit as any).pair === "function") {
+    await (walletKit as any).pair({ uri });
+
+    await chromeStorageSet({
+      lastWalletConnectPairDebug: {
+        stage: "after_walletkit_pair",
+        uriPrefix: uri.slice(0, 32),
+        createdAt: new Date().toISOString(),
+      },
+    });
+
     return;
   }
 
@@ -437,7 +463,8 @@ async function getWalletKit() {
 
   const core = new Core({
     projectId,
-  });
+    customStoragePrefix: "simple-walletconnect-offscreen",
+  } as any);
 
   walletKitPromise = WalletKit.init({
     core,
@@ -447,6 +474,14 @@ async function getWalletKit() {
   const walletKit = await walletKitPromise;
 
   walletKit.on("session_proposal", async (event: any) => {
+    await chromeStorageSet({
+      lastWalletConnectProposalRaw: {
+        id: event?.id,
+        params: event?.params,
+        createdAt: new Date().toISOString(),
+      },
+    });
+
     try {
       const proposal = event.params;
       const namespaces = await buildNamespacesForProposal(proposal);
