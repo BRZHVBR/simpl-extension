@@ -1227,7 +1227,7 @@ export default function WalletConnectPage({
             display: "flex",
             alignItems: "center",
             gap: 12,
-            padding: "0 16px",
+            padding: "0 14px",
             borderBottom: "1px solid #e7e5df",
             background: "#f7f7f4",
             width: "100%",
@@ -1270,7 +1270,7 @@ export default function WalletConnectPage({
             flex: 1,
             minHeight: 0,
             overflowY: "auto",
-            padding: "16px 16px 148px",
+            padding: "14px 14px 142px",
             width: "100%",
             display: "grid",
             gap: 14,
@@ -1288,7 +1288,7 @@ export default function WalletConnectPage({
                 color: "#ffffff",
                 display: "grid",
                 placeItems: "center",
-                fontSize: 18,
+                fontSize: 15,
                 fontWeight: 800,
               }}
             >
@@ -1299,8 +1299,8 @@ export default function WalletConnectPage({
               <h1
                 style={{
                   margin: 0,
-                  fontSize: 25,
-                  lineHeight: "28px",
+                  fontSize: 24,
+                  lineHeight: "27px",
                   letterSpacing: "-0.055em",
                   fontWeight: 880,
                 }}
@@ -1312,8 +1312,8 @@ export default function WalletConnectPage({
                 style={{
                   margin: 0,
                   color: "#6f6f68",
-                  fontSize: 14,
-                  lineHeight: "20px",
+                  fontSize: 13,
+                  lineHeight: "19px",
                 }}
               >
                 A connected dApp is requesting an action from SIMPLE.
@@ -1324,9 +1324,9 @@ export default function WalletConnectPage({
           <div
             style={{
               border: "1px solid #dfddd6",
-              borderRadius: 17,
+              borderRadius: 16,
               background: "#ffffff",
-              padding: 13,
+              padding: 12,
               width: "100%",
               display: "grid",
               gap: 14,
@@ -1375,7 +1375,7 @@ export default function WalletConnectPage({
               <pre
                 style={{
                   margin: 0,
-                  maxHeight: 92,
+                  maxHeight: 76,
                   overflowY: "auto",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
@@ -1459,30 +1459,40 @@ export default function WalletConnectPage({
                 style={{
                   width: "100%",
                   minWidth: 0,
-                  height: 48,
-                  borderRadius: 14,
+                  height: 46,
+                  borderRadius: 13,
                   border: "1px solid #dad7cf",
                   background: "#ffffff",
-                  padding: "0 16px",
-                  fontSize: 16,
+                  padding: "0 14px",
+                  fontSize: 15,
                   outline: "none",
                   boxSizing: "border-box",
                 }}
               />
+
+              <span
+                style={{
+                  color: "#8a8982",
+                  fontSize: 12,
+                  lineHeight: "16px",
+                }}
+              >
+                Sign becomes available after entering your wallet password.
+              </span>
             </label>
           ) : null}
 
           <div
             style={{
-              borderRadius: 16,
+              borderRadius: 14,
               background: "#efeee9",
-              color: "#6a6963",
-              padding: "11px 13px",
-              fontSize: 14,
-              lineHeight: "20px",
+              color: "#77766f",
+              padding: "10px 12px",
+              fontSize: 12,
+              lineHeight: "17px",
             }}
           >
-            WalletConnect request received: {method}
+            Request received: {method}
           </div>
         </section>
 
@@ -1495,7 +1505,7 @@ export default function WalletConnectPage({
             zIndex: 50,
             borderTop: "1px solid #e7e5df",
             background: "#f7f7f4",
-            padding: "12px 16px 16px",
+            padding: "10px 14px 14px",
             width: "100%",
             display: "grid",
             gap: 10,
@@ -1510,8 +1520,8 @@ export default function WalletConnectPage({
             disabled={!canApprove}
             style={{
               width: "100%",
-              height: 48,
-              borderRadius: 14,
+              height: 46,
+              borderRadius: 13,
               border: "none",
               background: canApprove ? "#111111" : "#b9b9b2",
               color: "#ffffff",
@@ -1530,8 +1540,8 @@ export default function WalletConnectPage({
             disabled={isResponding}
             style={{
               width: "100%",
-              height: 48,
-              borderRadius: 14,
+              height: 46,
+              borderRadius: 13,
               border: "1px solid #d6d3cb",
               background: "#ffffff",
               color: "#111111",
@@ -1731,8 +1741,8 @@ export default function WalletConnectPage({
           >
             <div
               style={{
-                width: 42,
-                height: 42,
+                width: 38,
+                height: 38,
                 borderRadius: 999,
                 background: "var(--text-primary, #111111)",
                 color: "#ffffff",
