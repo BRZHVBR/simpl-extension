@@ -224,6 +224,125 @@ async function ensureWalletConnectRequestChainSelected(
 
 
 
+
+
+function isWalletWatchAssetParamsEmpty(params: unknown): boolean {
+  if (params == null) {
+    return true;
+  }
+
+  if (Array.isArray(params)) {
+    return params.length === 0 || params.every((item) => isWalletWatchAssetParamsEmpty(item));
+  }
+
+  if (typeof params === "object") {
+    return Object.keys(params as Record<string, unknown>).length === 0;
+  }
+
+  return false;
+}
+
+function getWalletWatchAssetIdentityForDedupe(
+  params: unknown,
+  chainNamespace?: string,
+): {
+  address: string;
+  chainId: number;
+  symbol?: string;
+} | null {
+  try {
+    const payload = getWalletWatchAssetPayload(params);
+    const options = payload.options;
+
+    if (!options || typeof options !== "object") {
+      return null;
+    }
+
+    const optionsRecord = options as Record<string, unknown>;
+    const address =
+      typeof optionsRecord.address === "string"
+        ? optionsRecord.address.toLowerCase()
+        : "";
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      return null;
+    }
+
+    return {
+      address,
+      chainId: parseEip155ChainId(chainNamespace) ?? 1,
+      symbol:
+        typeof optionsRecord.symbol === "string"
+          ? optionsRecord.symbol
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function isWalletWatchAssetAlreadyStored(
+  params: unknown,
+  chainNamespace?: string,
+) {
+  const identity = getWalletWatchAssetIdentityForDedupe(params, chainNamespace);
+
+  if (!identity) {
+    return false;
+  }
+
+  const stored = await chrome.storage.local.get(["watchedAssets"]);
+  const current = Array.isArray(stored.watchedAssets) ? stored.watchedAssets : [];
+
+  return current.some((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+
+    const record = item as Record<string, unknown>;
+
+    const storedAddress =
+      typeof record.address === "string"
+        ? record.address.toLowerCase()
+        : typeof record.contractAddress === "string"
+          ? record.contractAddress.toLowerCase()
+          : "";
+
+    return Number(record.chainId) === identity.chainId && storedAddress === identity.address;
+  });
+}
+
+async function respondWalletWatchAssetNoopSuccess(args: {
+  walletKit: unknown;
+  pendingRequest: WalletConnectPendingRequest;
+  reason: string;
+}) {
+  await respondWalletConnectSuccess({
+    walletKit: args.walletKit,
+    topic: args.pendingRequest.topic,
+    id: args.pendingRequest.id,
+    result: true,
+  });
+
+  await chromeStorageSet({
+    lastWalletConnectApprovalResult: {
+      method: args.pendingRequest.method,
+      result: true,
+      reason: args.reason,
+      chainId: args.pendingRequest.chainId,
+      params: args.pendingRequest.params,
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  await clearPendingWalletConnectRequest();
+
+  return {
+    result: true,
+    reason: args.reason,
+  };
+}
+
 function getWalletWatchAssetPayload(params: unknown): Record<string, unknown> {
   const direct = Array.isArray(params) ? params[0] : params;
 
@@ -853,6 +972,28 @@ async function approvePendingWalletConnectRequest(password?: string) {
   }
 
   if (pendingRequest.method === "wallet_watchAsset") {
+    if (isWalletWatchAssetParamsEmpty(pendingRequest.params)) {
+      return await respondWalletWatchAssetNoopSuccess({
+        walletKit,
+        pendingRequest,
+        reason: "empty_wallet_watchAsset_params",
+      });
+    }
+
+    if (
+      await isWalletWatchAssetAlreadyStored(
+        pendingRequest.params,
+        pendingRequest.chainId,
+      )
+    ) {
+      return await respondWalletWatchAssetNoopSuccess({
+        walletKit,
+        pendingRequest,
+        reason: "asset_already_watched",
+      });
+    }
+
+
     const watchedAsset = await saveWalletConnectWatchedAsset(
       pendingRequest.params,
       pendingRequest.chainId,
