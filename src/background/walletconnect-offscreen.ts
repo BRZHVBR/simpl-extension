@@ -2,7 +2,6 @@
 
 import { Core } from "@walletconnect/core";
 import { WalletKit } from "@reown/walletkit";
-import { walletService } from "../core/wallet/wallet.service";
 
 const PENDING_WALLETCONNECT_REQUEST_KEY = "pendingWalletConnectRequest";
 const CONNECTED_SITES_KEY = "connectedSites";
@@ -55,6 +54,25 @@ type ConnectedSite = {
 
 let walletKitPromise: Promise<Awaited<ReturnType<typeof WalletKit.init>>> | null = null;
 
+function sendServiceWorkerMessage<TResponse = { ok?: boolean; error?: string }>(
+  message: Record<string, unknown>,
+): Promise<TResponse> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response?: TResponse) => {
+      const lastError = chrome.runtime.lastError?.message;
+
+      if (lastError) {
+        reject(new Error(lastError));
+        return;
+      }
+
+      resolve(response as TResponse);
+    });
+  });
+}
+
+
+
 function getProjectId(): string {
   return import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || "";
 }
@@ -69,11 +87,34 @@ function getMetadata() {
 }
 
 async function chromeStorageGet(keys: string | string[]): Promise<Record<string, unknown>> {
-  return chrome.storage.local.get(keys);
+  const response = await sendServiceWorkerMessage<{
+    ok?: boolean;
+    error?: string;
+    value?: Record<string, unknown>;
+  }>({
+    type: "SIMPLE_WALLETCONNECT_STORAGE_GET",
+    keys,
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.error ?? "Could not read extension storage.");
+  }
+
+  return response.value ?? {};
 }
 
 async function chromeStorageSet(items: Record<string, unknown>): Promise<void> {
-  await chrome.storage.local.set(items);
+  const response = await sendServiceWorkerMessage<{
+    ok?: boolean;
+    error?: string;
+  }>({
+    type: "SIMPLE_WALLETCONNECT_STORAGE_SET",
+    items,
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.error ?? "Could not write extension storage.");
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -215,17 +256,22 @@ async function saveConnectedSiteFromProposal(proposal: any) {
 }
 
 async function getSelectedWalletAccount() {
-  const bootstrap = await walletService.bootstrap();
-  const selectedAccount = bootstrap.selectedAccount;
+  const response = await sendServiceWorkerMessage<{
+    ok?: boolean;
+    error?: string;
+    account?: {
+      address: string;
+      chainId: number;
+    };
+  }>({
+    type: "SIMPLE_WALLETCONNECT_GET_SELECTED_ACCOUNT",
+  });
 
-  if (!selectedAccount) {
-    throw new Error("No selected SIMPLE account.");
+  if (!response?.ok || !response.account) {
+    throw new Error(response?.error ?? "No selected SIMPLE account.");
   }
 
-  return {
-    address: selectedAccount.address,
-    chainId: bootstrap.walletState.selectedChainId,
-  };
+  return response.account;
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -360,10 +406,23 @@ async function approvePendingWalletConnectRequest(password?: string) {
 
     const transaction = normalizeWalletConnectTransaction(pendingRequest.params);
 
-    const result = await walletService.sendSelectedPreparedTransaction({
+    const response = await sendServiceWorkerMessage<{
+      ok?: boolean;
+      error?: string;
+      result?: {
+        hash: string;
+      };
+    }>({
+      type: "SIMPLE_WALLETCONNECT_SEND_PREPARED_TRANSACTION",
       password: password.trim(),
       transaction,
     });
+
+    if (!response?.ok || !response.result?.hash) {
+      throw new Error(response?.error ?? "Transaction submission failed.");
+    }
+
+    const result = response.result;
 
     await (walletKit as any).respondSessionRequest?.({
       topic: pendingRequest.topic,
@@ -386,10 +445,23 @@ async function approvePendingWalletConnectRequest(password?: string) {
       throw new Error("Wallet password is required.");
     }
 
-    const result = await walletService.signSelectedTypedDataV4({
+    const response = await sendServiceWorkerMessage<{
+      ok?: boolean;
+      error?: string;
+      result?: {
+        signature: string;
+      };
+    }>({
+      type: "SIMPLE_WALLETCONNECT_SIGN_TYPED_DATA_V4",
       password: password.trim(),
       params: pendingRequest.params,
     });
+
+    if (!response?.ok || !response.result?.signature) {
+      throw new Error(response?.error ?? "Typed data signing failed.");
+    }
+
+    const result = response.result;
 
     await (walletKit as any).respondSessionRequest?.({
       topic: pendingRequest.topic,

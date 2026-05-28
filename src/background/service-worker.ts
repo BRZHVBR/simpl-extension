@@ -1,5 +1,7 @@
 /// <reference types="chrome" />
 
+import { walletService } from "../core/wallet/wallet.service";
+
 
 
 function disableSidePanelOnActionClick() {
@@ -181,6 +183,124 @@ chrome.runtime.onMessage.addListener((message: { type?: string }) => {
   }
 
   console.log("SIMPLE WalletConnect offscreen engine is ready.");
+
+  return false;
+});
+
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
+  if (message?.type === "SIMPLE_WALLETCONNECT_STORAGE_GET") {
+    void chrome.storage.local
+      .get(message.keys)
+      .then((value) => {
+        sendResponse({
+          ok: true,
+          value,
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: getErrorMessage(error),
+        });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_STORAGE_SET") {
+    void chrome.storage.local
+      .set(message.items ?? {})
+      .then(() => {
+        sendResponse({
+          ok: true,
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: getErrorMessage(error),
+        });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_GET_SELECTED_ACCOUNT") {
+    void walletService
+      .bootstrap()
+      .then((bootstrap) => {
+        const selectedAccount = bootstrap.selectedAccount;
+
+        if (!selectedAccount) {
+          throw new Error("No selected SIMPLE account.");
+        }
+
+        sendResponse({
+          ok: true,
+          account: {
+            address: selectedAccount.address,
+            chainId: bootstrap.walletState.selectedChainId,
+          },
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: getErrorMessage(error),
+        });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_SEND_PREPARED_TRANSACTION") {
+    void walletService
+      .sendSelectedPreparedTransaction({
+        password: typeof message.password === "string" ? message.password : undefined,
+        transaction: message.transaction,
+      })
+      .then((result) => {
+        sendResponse({
+          ok: true,
+          result,
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: getErrorMessage(error),
+        });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_SIGN_TYPED_DATA_V4") {
+    void walletService
+      .signSelectedTypedDataV4({
+        password: typeof message.password === "string" ? message.password : undefined,
+        params: message.params,
+      })
+      .then((result) => {
+        sendResponse({
+          ok: true,
+          result,
+        });
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: getErrorMessage(error),
+        });
+      });
+
+    return true;
+  }
 
   return false;
 });
