@@ -82,3 +82,40 @@ body {
   background: #b7b1a7;
   background-clip: padding-box;
 }
+
+
+/* WalletConnect approval focus polish */
+.wc-raw-details,
+.wc-raw-details:focus,
+.wc-raw-details:focus-visible,
+.wc-raw-details:focus-within,
+.wc-raw-summary,
+.wc-raw-summary:focus,
+.wc-raw-summary:focus-visible {
+  outline: none;
+}
+
+.wc-raw-summary {
+  border-radius: 10px;
+  padding: 2px 0;
+}
+
+.wc-raw-summary:hover {
+  color: #3f3d38;
+}
+
+.wc-raw-details[open] .wc-raw-summary {
+  margin-bottom: 8px;
+}
+
+.wc-raw-details[open] {
+  padding-top: 2px;
+}
+
+.wc-raw-box {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.wc-raw-pre {
+  max-width: 100%;
+}
