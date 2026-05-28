@@ -824,6 +824,67 @@ function formatRequestParams(params: unknown): string {
   }
 }
 
+function decodeWalletConnectHexMessage(value: string) {
+  const hex = value.startsWith("0x") ? value.slice(2) : value;
+
+  if (!hex || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    return value;
+  }
+
+  try {
+    const bytes = new Uint8Array(
+      hex.match(/.{1,2}/g)?.map((part) => parseInt(part, 16)) ?? [],
+    );
+
+    const decoded = new TextDecoder()
+      .decode(bytes)
+      .replace(/\u0000/g, "")
+      .trim();
+
+    return decoded || value;
+  } catch {
+    return value;
+  }
+}
+
+function getPersonalSignMessagePreview(params: unknown) {
+  if (!Array.isArray(params)) {
+    return formatRequestParams(params);
+  }
+
+  const messageCandidate = params.find(
+    (value): value is string =>
+      typeof value === "string" &&
+      value.startsWith("0x") &&
+      value.length > 10,
+  );
+
+  if (!messageCandidate) {
+    return formatRequestParams(params);
+  }
+
+  return decodeWalletConnectHexMessage(messageCandidate);
+}
+
+function getTypedDataMessagePreview(params: unknown) {
+  if (!Array.isArray(params)) {
+    return formatRequestParams(params);
+  }
+
+  const typedDataCandidate = params[1] ?? params[0];
+
+  if (typeof typedDataCandidate !== "string") {
+    return formatRequestParams(typedDataCandidate ?? params);
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(typedDataCandidate), null, 2);
+  } catch {
+    return typedDataCandidate;
+  }
+}
+
+
 function decodeHexUtf8Preview(value: string) {
   const normalized = value.startsWith("0x") ? value.slice(2) : value;
 
@@ -1255,9 +1316,9 @@ export default function WalletConnectPage({
 
     const previewText =
       method === "personal_sign"
-        ? formatPersonalSignPreview(pendingRequest.params)
+        ? getPersonalSignMessagePreview(pendingRequest.params)
         : method === "eth_signTypedData_v4"
-          ? formatTypedDataPreview(pendingRequest.params)
+          ? getTypedDataMessagePreview(pendingRequest.params)
           : method === "eth_sendTransaction"
             ? [
                 `From: ${getTransactionPreviewValue(pendingRequest.params, "from")}`,
@@ -1442,7 +1503,7 @@ export default function WalletConnectPage({
               <pre
                 style={{
                   margin: 0,
-                  maxHeight: 88,
+                  maxHeight: 128,
                   overflowY: "auto",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
