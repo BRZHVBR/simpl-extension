@@ -167,13 +167,20 @@ async function ensureWalletConnectOffscreenDocument(): Promise<void> {
 async function pingWalletConnectEngine(): Promise<void> {
   await ensureWalletConnectOffscreenDocument();
 
-  try {
-    await chrome.runtime.sendMessage({
-      type: "SIMPLE_WALLETCONNECT_ENGINE_PING",
-    });
-  } catch (error) {
-    console.warn("WalletConnect engine ping failed:", error);
-  }
+  // The offscreen document self-starts its WalletConnect engine.
+  // Do not immediately send a ping here: on cold start the offscreen
+  // script may not have registered its message listener yet.
 }
 
 void pingWalletConnectEngine();
+
+
+chrome.runtime.onMessage.addListener((message: { type?: string }) => {
+  if (message?.type !== "SIMPLE_WALLETCONNECT_ENGINE_READY") {
+    return false;
+  }
+
+  console.log("SIMPLE WalletConnect offscreen engine is ready.");
+
+  return false;
+});

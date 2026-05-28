@@ -27,8 +27,8 @@ function getMetadata() {
   return {
     name: "SIMPLE Wallet",
     description: "Local-first non-custodial EVM wallet.",
-    url: "https://diasoft.tech",
-    icons: ["https://diasoft.tech/icon.png"],
+    url: chrome.runtime.getURL("walletconnect-offscreen.html"),
+    icons: [chrome.runtime.getURL("walletconnect-offscreen.html")],
   };
 }
 
@@ -106,6 +106,15 @@ async function getWalletKit() {
   });
 
   console.log("SIMPLE WalletConnect offscreen engine started.");
+
+  chrome.runtime.sendMessage(
+    {
+      type: "SIMPLE_WALLETCONNECT_ENGINE_READY",
+    },
+    () => {
+      void chrome.runtime.lastError?.message;
+    },
+  );
 
   return walletKit;
 }
