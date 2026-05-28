@@ -1781,9 +1781,8 @@ export default function WalletConnectPage({
                   lineHeight: "18px",
                 }}
               >
-                {String(
-                  getSimpleWalletConnectPreview(method, pendingRequest.params),
-                ).trim() || "No readable preview available."}
+                {String(previewText).trim() ||
+                  "No readable preview available. Expand Raw request data below."}
               </pre>
             </div>
 
