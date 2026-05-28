@@ -824,6 +824,114 @@ function formatRequestParams(params: unknown): string {
   }
 }
 
+function decodeWcHexUtf8V2(value: string) {
+  const hex = value.startsWith("0x") ? value.slice(2) : value;
+
+  if (!hex || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    return value;
+  }
+
+  const bytes = hex.match(/.{1,2}/g)?.map((part) => parseInt(part, 16)) ?? [];
+
+  if (bytes.length === 0 || bytes.some((byte) => Number.isNaN(byte))) {
+    return value;
+  }
+
+  try {
+    return new TextDecoder("utf-8", { fatal: false })
+      .decode(new Uint8Array(bytes))
+      .replace(/\u0000/g, "")
+      .trim();
+  } catch {
+    return value;
+  }
+}
+
+function flattenWcStringsV2(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenWcStringsV2(item));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((item) =>
+      flattenWcStringsV2(item),
+    );
+  }
+
+  return [];
+}
+
+function isWcAddressV2(value: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
+function getWcPersonalSignPreviewV2(params: unknown) {
+  const strings = flattenWcStringsV2(params);
+
+  const hexMessage = strings.find(
+    (value) =>
+      value.startsWith("0x") &&
+      value.length > 42 &&
+      !isWcAddressV2(value),
+  );
+
+  if (hexMessage) {
+    const decoded = decodeWcHexUtf8V2(hexMessage);
+
+    if (decoded && decoded !== hexMessage) {
+      return decoded;
+    }
+
+    return hexMessage;
+  }
+
+  const nonAddressText = strings.find((value) => !isWcAddressV2(value));
+
+  return nonAddressText || formatRequestParams(params);
+}
+
+function getWcTypedDataPreviewV2(params: unknown) {
+  const values = Array.isArray(params) ? params : [];
+  const candidate = values[1] ?? values[0] ?? params;
+
+  if (typeof candidate === "string") {
+    try {
+      return JSON.stringify(JSON.parse(candidate), null, 2);
+    } catch {
+      return candidate;
+    }
+  }
+
+  return formatRequestParams(candidate);
+}
+
+function getWcPreviewTextV2(method: string, params: unknown) {
+  if (method === "personal_sign") {
+    return getWcPersonalSignPreviewV2(params);
+  }
+
+  if (method === "eth_signTypedData_v4") {
+    return getWcTypedDataPreviewV2(params);
+  }
+
+  if (method === "eth_sendTransaction") {
+    return [
+      `From: ${getTransactionPreviewValue(params, "from")}`,
+      `To: ${getTransactionPreviewValue(params, "to")}`,
+      `Value: ${getTransactionPreviewValue(params, "value")}`,
+      `Gas: ${getTransactionPreviewValue(params, "gas")}`,
+      `Chain: ${getWalletConnectTransactionChainId(params) ?? "Selected network"}`,
+    ].join("\\n");
+  }
+
+  return formatRequestParams(params);
+}
+
+
 function isHexAddress(value: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(value);
 }
@@ -1423,10 +1531,7 @@ export default function WalletConnectPage({
           ? "Transaction preview"
           : "Request preview";
 
-    const previewText = getWalletConnectApprovalPreview(
-      method,
-      pendingRequest.params,
-    );
+    const previewText = getWcPreviewTextV2(method, pendingRequest.params);
 
     return (
       <main
@@ -1611,8 +1716,8 @@ export default function WalletConnectPage({
                   lineHeight: "18px",
                 }}
               >
-                {previewText.trim()
-                  ? previewText
+                {String(previewText).trim()
+                  ? String(previewText)
                   : "No readable preview available. Expand Raw request data below."}
               </pre>
             </div>
