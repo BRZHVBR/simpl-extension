@@ -824,6 +824,115 @@ function formatRequestParams(params: unknown): string {
   }
 }
 
+function isHexAddress(value: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
+function decodeHexToReadableText(value: string) {
+  const hex = value.startsWith("0x") ? value.slice(2) : value;
+
+  if (!hex || hex.length % 2 !== 0 || !/^[a-fA-F0-9]+$/.test(hex)) {
+    return value;
+  }
+
+  try {
+    const bytes = new Uint8Array(
+      hex.match(/.{1,2}/g)?.map((chunk) => parseInt(chunk, 16)) ?? [],
+    );
+
+    const decoded = new TextDecoder("utf-8", { fatal: false })
+      .decode(bytes)
+      .replace(/\u0000/g, "")
+      .trim();
+
+    return decoded || value;
+  } catch {
+    return value;
+  }
+}
+
+function collectStringsFromUnknown(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectStringsFromUnknown(item));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((item) =>
+      collectStringsFromUnknown(item),
+    );
+  }
+
+  return [];
+}
+
+function getReadablePersonalSignPreview(params: unknown) {
+  const strings = collectStringsFromUnknown(params);
+
+  const messageCandidate =
+    strings.find(
+      (value) =>
+        value.startsWith("0x") &&
+        value.length > 42 &&
+        !isHexAddress(value),
+    ) ??
+    strings.find((value) => !isHexAddress(value)) ??
+    "";
+
+  if (!messageCandidate) {
+    return formatRequestParams(params);
+  }
+
+  const readable = messageCandidate.startsWith("0x")
+    ? decodeHexToReadableText(messageCandidate)
+    : messageCandidate;
+
+  return readable.trim() || formatRequestParams(params);
+}
+
+function getReadableTypedDataPreview(params: unknown) {
+  const values = Array.isArray(params) ? params : [];
+  const typedData = values[1] ?? values[0] ?? params;
+
+  if (typeof typedData === "string") {
+    try {
+      return JSON.stringify(JSON.parse(typedData), null, 2);
+    } catch {
+      return typedData;
+    }
+  }
+
+  return formatRequestParams(typedData);
+}
+
+function getWalletConnectApprovalPreview(method: string, params: unknown) {
+  if (method === "personal_sign") {
+    return getReadablePersonalSignPreview(params);
+  }
+
+  if (method === "eth_signTypedData_v4") {
+    return getReadableTypedDataPreview(params);
+  }
+
+  if (method === "eth_sendTransaction") {
+    return [
+      `From: ${getTransactionPreviewValue(params, "from")}`,
+      `To: ${getTransactionPreviewValue(params, "to")}`,
+      `Value: ${getTransactionPreviewValue(params, "value")}`,
+      `Gas: ${getTransactionPreviewValue(params, "gas")}`,
+      `Chain: ${
+        getWalletConnectTransactionChainId(params) ?? "Selected network"
+      }`,
+    ].join("\\n");
+  }
+
+  return formatRequestParams(params);
+}
+
+
 function decodeWalletConnectHexMessage(value: string) {
   const hex = value.startsWith("0x") ? value.slice(2) : value;
 
@@ -1314,23 +1423,10 @@ export default function WalletConnectPage({
           ? "Transaction preview"
           : "Request preview";
 
-    const previewText =
-      method === "personal_sign"
-        ? getPersonalSignMessagePreview(pendingRequest.params)
-        : method === "eth_signTypedData_v4"
-          ? getTypedDataMessagePreview(pendingRequest.params)
-          : method === "eth_sendTransaction"
-            ? [
-                `From: ${getTransactionPreviewValue(pendingRequest.params, "from")}`,
-                `To: ${getTransactionPreviewValue(pendingRequest.params, "to")}`,
-                `Value: ${getTransactionPreviewValue(pendingRequest.params, "value")}`,
-                `Gas: ${getTransactionPreviewValue(pendingRequest.params, "gas")}`,
-                `Chain: ${
-                  getWalletConnectTransactionChainId(pendingRequest.params) ??
-                  "Selected network"
-                }`,
-              ].join("\\n")
-            : formatRequestParams(pendingRequest.params);
+    const previewText = getWalletConnectApprovalPreview(
+      method,
+      pendingRequest.params,
+    );
 
     return (
       <main
@@ -1515,7 +1611,9 @@ export default function WalletConnectPage({
                   lineHeight: "18px",
                 }}
               >
-                {previewText}
+                {previewText.trim()
+                  ? previewText
+                  : "No readable preview available. Expand Raw request data below."}
               </pre>
             </div>
 
