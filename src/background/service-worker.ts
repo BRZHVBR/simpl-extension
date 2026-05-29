@@ -548,6 +548,33 @@ function extractTypedDataDisplay(params: unknown[]): TypedDataDisplay {
   }
 }
 
+const ERC20_APPROVE_SELECTOR = "095ea7b3";
+
+type DecodedErc20Approve = {
+  spender: string;
+  amountRaw: string;
+  isUnlimited: boolean;
+};
+
+function decodeErc20Approve(data: string | undefined): DecodedErc20Approve | null {
+  if (!data || typeof data !== "string") return null;
+  const hex = data.toLowerCase().startsWith("0x") ? data.slice(2).toLowerCase() : data.toLowerCase();
+  if (!hex.startsWith(ERC20_APPROVE_SELECTOR)) return null;
+  // Need selector (8) + spender slot (64) + amount slot (64) = 136 hex chars minimum
+  if (hex.length < 136) return null;
+  try {
+    // Spender: last 40 chars of first 32-byte slot (bytes 8..72)
+    const spender = `0x${hex.slice(8, 72).slice(-40)}`;
+    // Amount: second 32-byte slot (bytes 72..136)
+    const amountSlot = hex.slice(72, 136);
+    const isUnlimited = amountSlot === "f".repeat(64);
+    const amountRaw = BigInt(`0x${amountSlot}`).toString();
+    return { spender, amountRaw, isUnlimited };
+  } catch {
+    return null;
+  }
+}
+
 async function broadcastProviderEvent(event: string, data: unknown): Promise<void> {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
@@ -845,6 +872,7 @@ chrome.runtime.onMessage.addListener(
                     data: pending.transactionParams.data,
                     networkName: getChainById(bootstrap.walletState.selectedChainId)?.name ?? `Chain ${bootstrap.walletState.selectedChainId}`,
                     nativeCurrencySymbol: getChainById(bootstrap.walletState.selectedChainId)?.nativeCurrency.symbol ?? "ETH",
+                    erc20Approve: decodeErc20Approve(pending.transactionParams.data) ?? undefined,
                   },
                 }
               : {}),

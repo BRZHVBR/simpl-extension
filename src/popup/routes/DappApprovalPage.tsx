@@ -19,6 +19,12 @@ type SwitchChainData = {
   currentChainName: string;
 };
 
+type Erc20ApproveData = {
+  spender: string;
+  amountRaw: string;
+  isUnlimited: boolean;
+};
+
 type TransactionDisplayData = {
   from: string;
   to: string;
@@ -26,6 +32,7 @@ type TransactionDisplayData = {
   data?: string;
   networkName: string;
   nativeCurrencySymbol: string;
+  erc20Approve?: Erc20ApproveData;
 };
 
 type PendingData = {
@@ -357,6 +364,21 @@ function TransactionWarning() {
       fontSize: 12, lineHeight: "17px", fontWeight: 750,
     }}>
       You are about to send a transaction. This action cannot be undone and may result in loss of funds.
+    </div>
+  );
+}
+
+function UnlimitedApprovalWarning() {
+  return (
+    <div style={{
+      borderRadius: 14,
+      background: C.warnBg,
+      border: `1px solid ${C.warnBorder}`,
+      color: C.warnText,
+      padding: "10px 12px",
+      fontSize: 12, lineHeight: "17px", fontWeight: 750,
+    }}>
+      Unlimited approval: this spender can move this token from your wallet at any time until you revoke the permission.
     </div>
   );
 }
@@ -725,11 +747,15 @@ export default function DappApprovalPage() {
 
   if (kind === "transaction") {
     const tx = data.transaction;
+    const erc20 = tx?.erc20Approve ?? null;
     const symbol = tx?.nativeCurrencySymbol ?? "ETH";
-    const hasData = tx?.data && tx.data !== "0x" && tx.data.length > 2;
+    const hasData = !erc20 && tx?.data && tx.data !== "0x" && tx.data.length > 2;
+
+    const title = erc20 ? "Approve token spending" : "Confirm transaction";
+
     return (
       <Shell>
-        <ApprovalHeader title="Confirm transaction" onClose={reject} disabled={working} />
+        <ApprovalHeader title={title} onClose={reject} disabled={working} />
         <ScrollSection>
           <div style={{ display: "grid", gap: 14 }}>
             <div style={{
@@ -737,17 +763,20 @@ export default function DappApprovalPage() {
               background: C.cardBg, border: `1px solid ${C.cardBorder}`,
               display: "grid", placeItems: "center", fontSize: 22,
             }}>
-              ⬆
+              {erc20 ? "🔑" : "⬆"}
             </div>
             <div style={{ display: "grid", gap: 7 }}>
               <h1 style={{
                 margin: 0, fontSize: 24, lineHeight: "27px",
                 letterSpacing: "-0.055em", fontWeight: 880,
               }}>
-                Confirm transaction
+                {title}
               </h1>
               <p style={{ margin: 0, color: C.fgMuted, fontSize: 13, lineHeight: "19px" }}>
-                <strong>{domain}</strong> is requesting to send a transaction.
+                {erc20
+                  ? <><strong>{domain}</strong> is requesting permission to spend your tokens.</>
+                  : <><strong>{domain}</strong> is requesting to send a transaction.</>
+                }
               </p>
             </div>
           </div>
@@ -755,28 +784,53 @@ export default function DappApprovalPage() {
           <ApprovalCard>
             <AccountRow address={data.address!} />
 
-            <PreviewBox title="Transaction details">
-              <div style={{ display: "grid", gap: 8 }}>
-                {tx && (
-                  <>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
-                      <span style={{ color: C.fgMuted, flexShrink: 0 }}>To</span>
-                      <span style={{ fontWeight: 700, fontFamily: C.monoFont, fontSize: 12, textAlign: "right", wordBreak: "break-all" }}>
-                        {tx.to}
+            {erc20 ? (
+              <PreviewBox title="Token approval">
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "grid", gap: 3 }}>
+                    <span style={{ fontSize: 11, color: C.fgMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Token contract</span>
+                    <span style={{ fontSize: 12, fontFamily: C.monoFont, wordBreak: "break-all" }}>{tx?.to}</span>
+                  </div>
+                  <div style={{ display: "grid", gap: 3 }}>
+                    <span style={{ fontSize: 11, color: C.fgMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Spender</span>
+                    <span style={{ fontSize: 12, fontFamily: C.monoFont, wordBreak: "break-all" }}>{erc20.spender}</span>
+                  </div>
+                  <div style={{ display: "grid", gap: 3 }}>
+                    <span style={{ fontSize: 11, color: C.fgMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Amount</span>
+                    {erc20.isUnlimited ? (
+                      <span style={{ fontSize: 14, fontWeight: 800, color: C.danger }}>Unlimited</span>
+                    ) : (
+                      <span style={{ fontSize: 12, fontFamily: C.monoFont, wordBreak: "break-all" }}>
+                        {erc20.amountRaw}
                       </span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                      <span style={{ color: C.fgMuted }}>Network</span>
-                      <span style={{ fontWeight: 700 }}>{tx.networkName}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                      <span style={{ color: C.fgMuted }}>Value</span>
-                      <span style={{ fontWeight: 700 }}>{formatHexEth(tx.value, symbol)}</span>
-                    </div>
-                  </>
-                )}
-              </div>
-            </PreviewBox>
+                    )}
+                  </div>
+                </div>
+              </PreviewBox>
+            ) : (
+              <PreviewBox title="Transaction details">
+                <div style={{ display: "grid", gap: 8 }}>
+                  {tx && (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
+                        <span style={{ color: C.fgMuted, flexShrink: 0 }}>To</span>
+                        <span style={{ fontWeight: 700, fontFamily: C.monoFont, fontSize: 12, textAlign: "right", wordBreak: "break-all" }}>
+                          {tx.to}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                        <span style={{ color: C.fgMuted }}>Network</span>
+                        <span style={{ fontWeight: 700 }}>{tx.networkName}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                        <span style={{ color: C.fgMuted }}>Value</span>
+                        <span style={{ fontWeight: 700 }}>{formatHexEth(tx.value, symbol)}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </PreviewBox>
+            )}
 
             {hasData && tx?.data && (
               <PreviewBox title="Contract data">
@@ -790,7 +844,7 @@ export default function DappApprovalPage() {
             )}
           </ApprovalCard>
 
-          <TransactionWarning />
+          {erc20?.isUnlimited ? <UnlimitedApprovalWarning /> : <TransactionWarning />}
 
           <ApprovalCard>
             <PasswordInput
@@ -805,7 +859,7 @@ export default function DappApprovalPage() {
           <OriginNotice domain={domain} method="eth_sendTransaction" />
         </ScrollSection>
         <ApprovalFooter
-          primaryLabel="Confirm"
+          primaryLabel={erc20 ? "Approve" : "Confirm"}
           onPrimary={approve}
           onReject={reject}
           working={working}
