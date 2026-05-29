@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SimpleInstrumentIcon } from "../components/SimpleInstrumentIcon";
 import { AssetIcon } from "../components/AssetIcon";
+import { NetworkIcon } from "../components/NetworkIcon";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
 import type { WalletAssetBalance } from "../../core/tokens/token-balance.service";
@@ -62,6 +63,13 @@ const VALUATION_CURRENCIES: ValuationCurrency[] = [
 ];
 
 const VALUATION_STORAGE_KEY = "simple:nativeValuationCurrency";
+
+const CHAIN_OPTIONS = [
+  { chainId: 1, name: "Ethereum Mainnet", subtitle: "ETH · Chain 1" },
+  { chainId: 56, name: "BNB Smart Chain", subtitle: "BNB · Chain 56" },
+  { chainId: 8453, name: "Base", subtitle: "ETH · Chain 8453" },
+  { chainId: 11155111, name: "Sepolia", subtitle: "ETH · Chain 11155111" },
+];
 
 function getNetworkLabel(chainId: number): string {
   if (chainId === 1) return "Ethereum";
@@ -354,6 +362,7 @@ export function HomePage(props: HomePageProps) {
   const [valuationCurrency, setValuationCurrency] =
     useState<ValuationCurrency>(getInitialValuationCurrency);
   const [isValuationSelectorOpen, setIsValuationSelectorOpen] = useState(false);
+  const [isNetworkSelectorOpen, setIsNetworkSelectorOpen] = useState(false);
   const [portfolioStatus, setPortfolioStatus] =
     useState<PortfolioStatus>("idle");
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
@@ -565,6 +574,25 @@ export function HomePage(props: HomePageProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [isValuationSelectorOpen]);
 
+  useEffect(() => {
+    if (!isNetworkSelectorOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setIsNetworkSelectorOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isNetworkSelectorOpen]);
+
+  async function handleSelectNetwork(chainId: number) {
+    if (chainId === props.walletState.selectedChainId) {
+      setIsNetworkSelectorOpen(false);
+      return;
+    }
+    await walletService.setSelectedChainId(chainId);
+    setIsNetworkSelectorOpen(false);
+    await props.onRefresh();
+  }
+
   if (!props.selectedAccount) {
     return (
       <div className="ext-popup" data-screen-label="03 Home">
@@ -622,8 +650,8 @@ export function HomePage(props: HomePageProps) {
 
         <span style={{ flex: 1 }} />
 
-        <button className="net-chip" type="button">
-          <span className="dot" />
+        <button className="net-chip" type="button" onClick={() => setIsNetworkSelectorOpen(true)}>
+          <NetworkIcon chainId={props.walletState.selectedChainId} size={18} />
           {getNetworkLabel(props.walletState.selectedChainId)}
         </button>
 
@@ -840,6 +868,71 @@ export function HomePage(props: HomePageProps) {
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {isNetworkSelectorOpen && (
+        <div className="network-sheet-backdrop">
+          <button
+            type="button"
+            className="network-sheet-scrim"
+            aria-label="Close network selector"
+            onClick={() => setIsNetworkSelectorOpen(false)}
+          />
+
+          <section className="network-sheet">
+            <div className="network-sheet-head">
+              <div>
+                <div className="network-sheet-title">Select network</div>
+                <div className="network-sheet-subtitle">Choose active EVM network.</div>
+              </div>
+
+              <button
+                type="button"
+                className="icbtn"
+                onClick={() => setIsNetworkSelectorOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="row-list">
+              {CHAIN_OPTIONS.map((chain) => {
+                const active = chain.chainId === props.walletState.selectedChainId;
+
+                return (
+                  <button
+                    key={chain.chainId}
+                    type="button"
+                    className="row"
+                    onClick={() => void handleSelectNetwork(chain.chainId)}
+                    style={{
+                      width: "100%",
+                      border: 0,
+                      background: active ? "var(--bg-sunken)" : "transparent",
+                      textAlign: "left",
+                    }}
+                  >
+                    <NetworkIcon chainId={chain.chainId} networkName={chain.name} size={36} />
+
+                    <div className="body">
+                      <div className="nm">{chain.name}</div>
+                      <div className="sub">{chain.subtitle}</div>
+                    </div>
+
+                    <div className="num">
+                      <div
+                        className="v"
+                        style={active ? { color: "var(--secure)" } : undefined}
+                      >
+                        {active ? "Active" : "›"}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         </div>
       )}
     </div>

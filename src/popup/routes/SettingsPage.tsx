@@ -14,6 +14,7 @@ import {
   getBiometricWalletId,
 } from "../../core/security/biometric-unlock.helpers";
 import { openFullscreenApp, openSidePanel } from "../surface-actions";
+import { NetworkIcon } from "../components/NetworkIcon";
 
 import SecurityCenterPage from "./SecurityCenterPage";
 
@@ -741,9 +742,7 @@ export function SettingsPage({
                       textAlign: "left",
                     }}
                   >
-                    <div className="tok">
-                      <CrosshairIcon />
-                    </div>
+                    <NetworkIcon chainId={chain.chainId} networkName={chain.name} size={36} />
 
                     <div className="body">
                       <div className="nm">{chain.name}</div>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" fill="#0052FF"/>
+  <!-- Coinbase / Base logo: large arc open on the right -->
+  <path d="M 21.66,10.34 A 8,8 0 1,0 21.66,21.66"
+        fill="none" stroke="white" stroke-width="3.8" stroke-linecap="round"/>
+</svg>

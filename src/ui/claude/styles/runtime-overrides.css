@@ -3051,3 +3051,78 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
   -webkit-backdrop-filter: blur(7px) !important;
 }
 
+
+/* =========================================================
+   Network Icon
+   ========================================================= */
+
+.network-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative !important;
+  flex-shrink: 0 !important;
+  /* No border, no background — the SVG icon carries its own bg */
+}
+
+.network-icon__img {
+  border-radius: 50% !important;
+  display: block !important;
+  /* contain so the square SVG is cropped to a circle, no overflow */
+  object-fit: cover !important;
+  flex-shrink: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.network-icon--fallback {
+  display: block !important;
+  flex-shrink: 0 !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+}
+
+.network-icon__letter {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: white !important;
+}
+
+.network-icon__testnet-badge {
+  position: absolute !important;
+  bottom: -1px !important;
+  right: -1px !important;
+  width: 7px !important;
+  height: 7px !important;
+  border-radius: 50% !important;
+  background: #f59e0b !important;
+  border: 1.5px solid white !important;
+}
+
+/* Home network chip — remove legacy dot, align icon with text */
+.net-chip {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+
+.net-chip .dot {
+  display: none !important;
+}
+
+/* Network selector rows — remove dark tok background so icons show cleanly */
+.network-sheet .row .tok {
+  background: transparent !important;
+  border: none !important;
+  width: auto !important;
+  height: auto !important;
+  padding: 0 !important;
+  flex-shrink: 0 !important;
+}
+
+/* Belt-and-suspenders: any .tok containing a .network-icon should be transparent */
+.row .tok:has(> .network-icon) {
+  background: transparent !important;
+  border: none !important;
+}
+
