@@ -46,6 +46,12 @@ type WalletConnectPendingRequest = {
   params: unknown;
 };
 
+type WcError = {
+  title: string;
+  subtitle: string;
+  action: string;
+};
+
 type WalletKitClient = {
   on?: (event: string, handler: (event: any) => void) => void;
   off?: (event: string, handler: (event: any) => void) => void;
@@ -96,6 +102,8 @@ const WALLETCONNECT_METHODS = [
 ] as const;
 
 const WALLETCONNECT_EVENTS = ["accountsChanged", "chainChanged"] as const;
+
+const PAIR_TIMEOUT_MS = 30_000;
 
 function BackIcon() {
   return <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>;
@@ -1436,6 +1444,69 @@ async function updateSelectedChainId(chainId: number) {
   }
 }
 
+function makeWcError(
+  reason: "uri" | "timeout" | "relay" | "proposal" | "generic",
+  rawMessage?: string,
+): WcError {
+  switch (reason) {
+    case "uri":
+      return {
+        title: "Invalid WalletConnect link",
+        subtitle: "Check the QR code or connection link and try again.",
+        action: "Try again",
+      };
+    case "timeout":
+      return {
+        title: "Connection timed out",
+        subtitle: "The dApp did not respond in time. Try scanning the QR code again.",
+        action: "Try again",
+      };
+    case "relay":
+      return {
+        title: "WalletConnect connection failed",
+        subtitle: "Check your internet connection and try again.",
+        action: "Retry",
+      };
+    case "proposal":
+      return {
+        title: "Connection request expired",
+        subtitle: "The connection request is no longer valid. Scan the QR code again.",
+        action: "Try again",
+      };
+    default: {
+      const isRelayError =
+        rawMessage != null &&
+        /relay|websocket|network|offline|unreachable|failed to fetch|socket/i.test(rawMessage);
+
+      if (isRelayError) {
+        return {
+          title: "WalletConnect connection failed",
+          subtitle: "Check your internet connection and try again.",
+          action: "Retry",
+        };
+      }
+
+      const isProposalError =
+        rawMessage != null &&
+        /expired|rejected|cancelled|not found|invalid proposal/i.test(rawMessage);
+
+      if (isProposalError) {
+        return {
+          title: "Connection request expired",
+          subtitle: "The connection request is no longer valid. Scan the QR code again.",
+          action: "Try again",
+        };
+      }
+
+      return {
+        title: "Connection failed",
+        subtitle: rawMessage ?? "An unexpected error occurred.",
+        action: "Try again",
+      };
+    }
+  }
+}
+
 async function respondUnsupported(client: WalletKitClient, topic: string, id: number, message: string) {
   await client.respondSessionRequest?.({
     topic,
@@ -1459,12 +1530,14 @@ export default function WalletConnectPage({
   const [proposal, setProposal] = useState<WalletConnectProposal | null>(null);
   const [walletSnapshot, setWalletSnapshot] = useState<WalletSnapshot | null>(null);
   const [status, setStatus] = useState("WalletConnect is ready.");
-  const [error, setError] = useState<string | null>(null);
+  const [wcError, setWcError] = useState<WcError | null>(null);
   const [isPairing, setIsPairing] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [pendingRequest, setPendingRequest] = useState<WalletConnectPendingRequest | null>(null);
   const [isResponding, setIsResponding] = useState(false);
   const [approvalPassword, setApprovalPassword] = useState("");
+  const [sessions, setSessions] = useState<ConnectedSite[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
 
   const site = useMemo(() => {
     return proposal ? getProposalSite(proposal) : null;
@@ -1478,14 +1551,17 @@ export default function WalletConnectPage({
       return;
     }
 
+    setStatus("Restoring sessions...");
+
     void readPendingWalletConnectRequest().then((request) => {
       if (!request) {
+        setStatus("WalletConnect is ready.");
         return;
       }
 
       setPendingRequest(request);
-      setError(null);
-      setStatus(`WalletConnect request received: ${request.method}`);
+      setWcError(null);
+      setStatus(`Waiting for approval...`);
     });
   }, []);
 
@@ -1500,22 +1576,40 @@ export default function WalletConnectPage({
     return client;
   }
 
+  async function loadSessions() {
+    setSessionsLoading(true);
+
+    try {
+      const sites = await readConnectedSites();
+      setSessions(sites);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function disconnectSession(id: string) {
+    const current = await readConnectedSites();
+    const next = current.filter((site) => site.id !== id && site.origin !== id);
+    await writeConnectedSites(next);
+    setSessions(next);
+  }
+
   async function pair(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const nextUri = uri.trim();
 
     if (!nextUri.startsWith("wc:")) {
-      setError("Paste a valid WalletConnect URI that starts with wc:.");
+      setWcError(makeWcError("uri"));
       return;
     }
 
     setIsPairing(true);
-    setError(null);
-    setStatus("Sending WalletConnect URI to SIMPLE engine…");
+    setWcError(null);
+    setStatus("Connecting to dApp...");
 
     try {
-      const response = await sendWalletConnectEngineMessage<{
+      const pairingPromise = sendWalletConnectEngineMessage<{
         ok?: boolean;
         error?: string;
       }>({
@@ -1523,16 +1617,30 @@ export default function WalletConnectPage({
         uri: nextUri,
       });
 
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("PAIR_TIMEOUT")), PAIR_TIMEOUT_MS);
+      });
+
+      const response = await Promise.race([pairingPromise, timeoutPromise]);
+
       if (!response?.ok) {
         throw new Error(response?.error ?? "WalletConnect pairing failed.");
       }
 
       setUri("");
-      setStatus("WalletConnect pairing started. SIMPLE will approve the session automatically.");
+      setStatus("Waiting for dApp approval...");
       await onConnected?.();
+      await loadSessions();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "WalletConnect pairing failed.");
-      setStatus("WalletConnect pairing failed.");
+      const msg = nextError instanceof Error ? nextError.message : "";
+
+      if (msg === "PAIR_TIMEOUT") {
+        setWcError(makeWcError("timeout"));
+        setStatus("Connection timed out.");
+      } else {
+        setWcError(makeWcError("generic", msg));
+        setStatus("Connection failed.");
+      }
     } finally {
       setIsPairing(false);
     }
@@ -1544,7 +1652,7 @@ export default function WalletConnectPage({
     }
 
     setIsApproving(true);
-    setError(null);
+    setWcError(null);
     setStatus("Approving WalletConnect session…");
 
     try {
@@ -1564,8 +1672,10 @@ export default function WalletConnectPage({
       setUri("");
       setStatus("WalletConnect session approved.");
       await onConnected?.();
+      await loadSessions();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not approve WalletConnect session.");
+      const msg = nextError instanceof Error ? nextError.message : "";
+      setWcError(makeWcError("generic", msg));
       setStatus("WalletConnect approval failed.");
     } finally {
       setIsApproving(false);
@@ -1578,7 +1688,7 @@ export default function WalletConnectPage({
     }
 
     setIsApproving(true);
-    setError(null);
+    setWcError(null);
     setStatus("Rejecting WalletConnect session…");
 
     try {
@@ -1589,7 +1699,8 @@ export default function WalletConnectPage({
       setProposal(null);
       setStatus("WalletConnect session rejected.");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not reject WalletConnect session.");
+      const msg = nextError instanceof Error ? nextError.message : "";
+      setWcError(makeWcError("proposal", msg));
     } finally {
       setIsApproving(false);
     }
@@ -1601,7 +1712,7 @@ export default function WalletConnectPage({
     }
 
     setIsResponding(true);
-    setError(null);
+    setWcError(null);
     setStatus(`Approving ${pendingRequest.method}…`);
 
     try {
@@ -1648,11 +1759,8 @@ export default function WalletConnectPage({
     } catch (nextError) {
       console.error("WalletConnect request approval failed:", nextError);
 
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : "Could not approve WalletConnect request.",
-      );
+      const msg = nextError instanceof Error ? nextError.message : "";
+      setWcError(makeWcError("generic", msg));
       setStatus("WalletConnect request approval failed.");
     } finally {
       setIsResponding(false);
@@ -1665,7 +1773,7 @@ export default function WalletConnectPage({
     }
 
     setIsResponding(true);
-    setError(null);
+    setWcError(null);
     setStatus("Rejecting WalletConnect request…");
 
     try {
@@ -1691,11 +1799,8 @@ export default function WalletConnectPage({
         window.setTimeout(() => window.close(), 300);
       }
     } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : "Could not reject WalletConnect request.",
-      );
+      const msg = nextError instanceof Error ? nextError.message : "";
+      setWcError(makeWcError("generic", msg));
       setStatus("WalletConnect request rejection failed.");
     } finally {
       setIsResponding(false);
@@ -1711,6 +1816,8 @@ export default function WalletConnectPage({
     }).catch((nextError) => {
       console.warn("WalletConnect engine ping failed:", nextError);
     });
+
+    void loadSessions();
   }, []);
 
   if (pendingRequest) {
@@ -2377,20 +2484,215 @@ export default function WalletConnectPage({
           {status}
         </div>
 
-        {error ? (
+        {wcError ? (
           <div
             style={{
               marginTop: 14,
-              color: "#a23b2d",
-              fontSize: 13,
-              lineHeight: "19px",
-              fontWeight: 700,
+              padding: "14px 16px",
+              borderRadius: 16,
+              background: "#fff3f1",
+              border: "1px solid #f5ccc7",
             }}
           >
-            {error}
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 800,
+                color: "#a23b2d",
+                letterSpacing: "-0.01em",
+              }}
+            >
+              {wcError.title}
+            </div>
+
+            <div
+              style={{
+                marginTop: 5,
+                fontSize: 13,
+                lineHeight: "18px",
+                color: "#7a3028",
+              }}
+            >
+              {wcError.subtitle}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setWcError(null)}
+              style={{
+                marginTop: 12,
+                height: 34,
+                padding: "0 14px",
+                border: "1px solid #f0b8b0",
+                borderRadius: 999,
+                background: "#ffffff",
+                color: "#a23b2d",
+                fontSize: 13,
+                fontWeight: 750,
+                cursor: "pointer",
+              }}
+            >
+              {wcError.action}
+            </button>
           </div>
         ) : null}
 
+
+        <section style={{ marginTop: 32 }}>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              color: "var(--text-secondary, #777777)",
+              marginBottom: 10,
+            }}
+          >
+            Active sessions
+          </div>
+
+          {sessionsLoading ? (
+            <div
+              style={{
+                padding: "14px 16px",
+                borderRadius: 14,
+                background: "var(--bg-sunken, #f7f7f4)",
+                fontSize: 13,
+                color: "var(--text-secondary, #777777)",
+              }}
+            >
+              Restoring sessions...
+            </div>
+          ) : sessions.length === 0 ? (
+            <div
+              style={{
+                padding: "20px 16px",
+                borderRadius: 16,
+                background: "var(--bg-sunken, #f7f7f4)",
+                textAlign: "center",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: 750,
+                  color: "var(--text-primary, #111111)",
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                No WalletConnect sessions
+              </div>
+
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 13,
+                  lineHeight: "18px",
+                  color: "var(--text-secondary, #777777)",
+                }}
+              >
+                Connect to a dApp with WalletConnect to see active sessions here.
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{
+                border: "1px solid var(--border, #dedede)",
+                borderRadius: 16,
+                overflow: "hidden",
+              }}
+            >
+              {sessions.map((session, index) => (
+                <div
+                  key={session.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "12px 14px",
+                    background: "var(--bg, #ffffff)",
+                    borderTop: index === 0 ? "none" : "1px solid var(--border, #f0f0f0)",
+                  }}
+                >
+                  {session.iconUrl ? (
+                    <img
+                      src={session.iconUrl}
+                      alt=""
+                      width={36}
+                      height={36}
+                      style={{ borderRadius: 10, flexShrink: 0, objectFit: "cover" }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: 10,
+                        background: "var(--bg-sunken, #f0f0f0)",
+                        flexShrink: 0,
+                        display: "grid",
+                        placeItems: "center",
+                        fontSize: 14,
+                        fontWeight: 800,
+                        color: "var(--text-secondary, #777777)",
+                      }}
+                    >
+                      {(session.name ?? session.origin).slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: "var(--text-primary, #111111)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {session.name ?? session.origin}
+                    </div>
+
+                    {session.name ? (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-secondary, #777777)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {session.origin}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => void disconnectSession(session.id)}
+                    style={{
+                      flexShrink: 0,
+                      height: 30,
+                      padding: "0 12px",
+                      border: "1px solid var(--border, #dedede)",
+                      borderRadius: 999,
+                      background: "transparent",
+                      color: "var(--text-primary, #111111)",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
 
         {site && proposal ? (
           <section
