@@ -3,11 +3,22 @@ import { useEffect, useState } from "react";
 // chrome is a global in extension pages
 declare const chrome: typeof globalThis extends { chrome: infer C } ? C : never;
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type TypedDataDisplay = {
+  domainName?: string;
+  verifyingContract?: string;
+  primaryType?: string;
+  messageJson?: string;
+};
+
 type PendingData = {
   origin: string;
   address: string | null;
   chainId: number;
-  chainName: string;
+  kind: "connect" | "personal_sign" | "typed_data";
+  displayMessage?: string;
+  typedDataDisplay?: TypedDataDisplay;
 };
 
 type PageState =
@@ -16,16 +27,18 @@ type PageState =
   | { status: "ready"; data: PendingData }
   | { status: "error"; message: string };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function shortAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 function chainLabel(chainId: number): string {
   const names: Record<number, string> = {
-    1: "Ethereum Mainnet",
+    1: "Ethereum",
     56: "BNB Smart Chain",
     8453: "Base",
-    11155111: "Sepolia Testnet",
+    11155111: "Sepolia",
   };
   return names[chainId] ?? `Chain ${chainId}`;
 }
@@ -38,9 +51,344 @@ function safeHostname(origin: string): string {
   }
 }
 
+// ─── Design tokens (match WalletConnectPage exactly) ─────────────────────────
+
+const C = {
+  bg: "#f7f7f4",
+  fg: "#111111",
+  fgMuted: "#6f6f68",
+  fgDim: "#77766f",
+  border: "#e7e5df",
+  cardBg: "#ffffff",
+  cardBorder: "#dfddd6",
+  previewBg: "#fbfbf8",
+  previewBorder: "#e5e3dc",
+  previewText: "#5e5e57",
+  warnBg: "#fff8df",
+  warnBorder: "#f2df9b",
+  warnText: "#6c4b00",
+  noticeBg: "#efeee9",
+  noticeText: "#77766f",
+  danger: "#a23b2d",
+  monoFont: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace',
+};
+
+// ─── Shared layout shells ─────────────────────────────────────────────────────
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <main style={{
+      position: "fixed", inset: 0,
+      height: "100dvh", minHeight: "100dvh", width: "100vw",
+      display: "flex", flexDirection: "column",
+      overflow: "hidden",
+      background: C.bg, color: C.fg,
+      boxSizing: "border-box",
+    }}>
+      {children}
+    </main>
+  );
+}
+
+function ApprovalHeader({ title, onClose, disabled }: { title: string; onClose: () => void; disabled?: boolean }) {
+  return (
+    <header style={{
+      height: 56, flexShrink: 0,
+      display: "flex", alignItems: "center", gap: 12,
+      padding: "0 14px",
+      borderBottom: `1px solid ${C.border}`,
+      background: C.bg,
+      boxSizing: "border-box",
+    }}>
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        disabled={disabled}
+        style={{
+          width: 34, height: 34,
+          border: "none", borderRadius: 12,
+          background: "transparent",
+          color: C.fg,
+          cursor: "pointer",
+          fontSize: 22, lineHeight: "30px",
+          padding: 0, flexShrink: 0,
+        }}
+      >
+        ×
+      </button>
+      <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "-0.02em" }}>
+        {title}
+      </div>
+    </header>
+  );
+}
+
+function ScrollSection({ children }: { children: React.ReactNode }) {
+  return (
+    <section style={{
+      flex: 1, minHeight: 0,
+      overflowY: "auto",
+      padding: "14px 14px 140px",
+      width: "100%",
+      display: "grid", gap: 14,
+      alignContent: "start",
+      boxSizing: "border-box",
+    }}>
+      {children}
+    </section>
+  );
+}
+
+function ApprovalFooter({
+  primaryLabel,
+  onPrimary,
+  onReject,
+  working,
+  primaryDisabled,
+}: {
+  primaryLabel: string;
+  onPrimary: () => void;
+  onReject: () => void;
+  working: boolean;
+  primaryDisabled?: boolean;
+}) {
+  const blocked = working || primaryDisabled;
+  return (
+    <footer style={{
+      position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 50,
+      borderTop: `1px solid ${C.border}`,
+      background: C.bg,
+      padding: "10px 14px 14px",
+      display: "grid", gap: 10,
+      boxSizing: "border-box",
+      boxShadow: `0 -16px 28px rgba(247,247,244,0.96)`,
+    }}>
+      <button
+        type="button"
+        onClick={onPrimary}
+        disabled={blocked}
+        style={{
+          width: "100%", height: 46,
+          borderRadius: 13, border: "none",
+          background: blocked ? "#b9b9b2" : C.fg,
+          color: "#ffffff",
+          fontSize: 16, fontWeight: 850,
+          cursor: blocked ? "default" : "pointer",
+        }}
+      >
+        {working ? "Processing…" : primaryLabel}
+      </button>
+      <button
+        type="button"
+        onClick={onReject}
+        disabled={working}
+        style={{
+          width: "100%", height: 46,
+          borderRadius: 13,
+          border: "1px solid #d6d3cb",
+          background: C.cardBg,
+          color: C.fg,
+          fontSize: 16, fontWeight: 750,
+          cursor: working ? "default" : "pointer",
+        }}
+      >
+        Reject
+      </button>
+    </footer>
+  );
+}
+
+// ─── Reusable sub-components ──────────────────────────────────────────────────
+
+function SimplIcon() {
+  return (
+    <div style={{
+      width: 46, height: 46, borderRadius: 15,
+      background: C.fg, color: "#ffffff",
+      display: "grid", placeItems: "center",
+      fontSize: 15, fontWeight: 800,
+      flexShrink: 0,
+    }}>
+      S
+    </div>
+  );
+}
+
+function ApprovalCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      border: `1px solid ${C.cardBorder}`,
+      borderRadius: 16,
+      background: C.cardBg,
+      padding: 12,
+      display: "grid", gap: 14,
+      boxSizing: "border-box",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function AccountRow({ address }: { address: string }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10,
+      padding: "8px 10px",
+      border: `1px solid ${C.previewBorder}`,
+      borderRadius: 13,
+      background: C.previewBg,
+      boxSizing: "border-box",
+    }}>
+      <div style={{
+        width: 30, height: 30, borderRadius: 10,
+        background: C.fg, opacity: 0.12, flexShrink: 0,
+      }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: C.fgMuted, marginBottom: 1 }}>Wallet</div>
+        <div style={{
+          fontSize: 13, fontWeight: 700,
+          fontFamily: C.monoFont,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {shortAddress(address)}
+        </div>
+      </div>
+      <div style={{
+        fontSize: 11, fontWeight: 800,
+        color: "#1d7a3f",
+        background: "#e8f8ef",
+        padding: "2px 8px", borderRadius: 8,
+        flexShrink: 0,
+      }}>
+        Active
+      </div>
+    </div>
+  );
+}
+
+function PreviewBox({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      border: `1px solid ${C.previewBorder}`,
+      borderRadius: 15,
+      background: C.previewBg,
+      padding: 14,
+      display: "grid", gap: 10,
+      overflow: "hidden",
+      boxSizing: "border-box",
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 850, letterSpacing: "-0.01em" }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function MonoPre({ text }: { text: string }) {
+  return (
+    <pre style={{
+      margin: 0,
+      maxHeight: 128, overflowY: "auto",
+      whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere",
+      fontFamily: C.monoFont,
+      color: C.previewText,
+      fontSize: 12, lineHeight: "18px",
+    }}>
+      {text.trim() || "(empty)"}
+    </pre>
+  );
+}
+
+function SigningWarning() {
+  return (
+    <div style={{
+      borderRadius: 14,
+      background: C.warnBg,
+      border: `1px solid ${C.warnBorder}`,
+      color: C.warnText,
+      padding: "10px 12px",
+      fontSize: 12, lineHeight: "17px", fontWeight: 750,
+    }}>
+      Signing this message does not send funds, but it may log you in or authorize actions on this site.
+    </div>
+  );
+}
+
+function OriginNotice({ domain, method }: { domain: string; method: string }) {
+  return (
+    <div style={{
+      borderRadius: 14,
+      background: C.noticeBg,
+      color: C.noticeText,
+      padding: "10px 12px",
+      fontSize: 12, lineHeight: "17px",
+    }}>
+      {method} requested by <strong style={{ color: C.fg }}>{domain}</strong>
+    </div>
+  );
+}
+
+function PasswordInput({
+  value,
+  onChange,
+  onEnter,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onEnter?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <label style={{
+        fontSize: 11, fontWeight: 850, letterSpacing: "0.12em",
+        textTransform: "uppercase", color: C.fgMuted,
+      }}>
+        Wallet password
+      </label>
+      <input
+        type="password"
+        autoComplete="current-password"
+        placeholder="Enter password to sign"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && value.trim() && onEnter) onEnter();
+        }}
+        style={{
+          width: "100%", height: 44,
+          borderRadius: 12,
+          border: `1px solid ${C.cardBorder}`,
+          background: C.cardBg,
+          padding: "0 14px",
+          fontSize: 15,
+          color: C.fg,
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </div>
+  );
+}
+
+function ErrorLine({ message }: { message: string }) {
+  return (
+    <div style={{ color: C.danger, fontSize: 13, lineHeight: "18px", fontWeight: 700 }}>
+      {message}
+    </div>
+  );
+}
+
+// ─── Page component ───────────────────────────────────────────────────────────
+
 export default function DappApprovalPage() {
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [working, setWorking] = useState(false);
+  const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
   const approvalId = new URLSearchParams(location.search).get("id") ?? "";
@@ -59,14 +407,11 @@ export default function DappApprovalPage() {
           setState({ status: "error", message: response?.error ?? "Request not found." });
           return;
         }
-
         const pending = response.pending!;
-
         if (!pending.address) {
           setState({ status: "locked" });
           return;
         }
-
         setState({ status: "ready", data: pending });
       },
     );
@@ -85,185 +430,330 @@ export default function DappApprovalPage() {
     if (state.status !== "ready") return;
     setWorking(true);
     setErrorMsg("");
+    const needsPassword = state.data.kind === "personal_sign" || state.data.kind === "typed_data";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (chrome as any).runtime.sendMessage(
-      { type: "SIMPL_DAPP_APPROVE", id: approvalId },
+      {
+        type: "SIMPL_DAPP_APPROVE",
+        id: approvalId,
+        ...(needsPassword ? { password } : {}),
+      },
       (response: { ok: boolean; error?: string } | null) => {
         if (response?.ok) {
           window.close();
         } else {
           setWorking(false);
-          setErrorMsg(response?.error ?? "Failed to connect.");
+          setErrorMsg(response?.error ?? "Action failed.");
         }
       },
     );
   }
 
-  // --- Render states ---
+  // ── Loading ──
 
   if (state.status === "loading") {
     return (
-      <div className="simple-page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 360 }}>
-        <span style={{ color: "var(--fg-muted)", fontSize: 14 }}>Loading…</span>
-      </div>
+      <Shell>
+        <div style={{
+          flex: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <span style={{ color: C.fgMuted, fontSize: 14 }}>Loading…</span>
+        </div>
+      </Shell>
     );
   }
+
+  // ── Error ──
 
   if (state.status === "error") {
     return (
-      <div className="simple-page" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 360, padding: 24 }}>
-        <span style={{ fontSize: 32 }}>⚠</span>
-        <p style={{ color: "var(--fg-muted)", fontSize: 14, textAlign: "center" }}>{state.message}</p>
-        <button className="icbtn" onClick={() => window.close()} style={{ marginTop: 8 }}>Close</button>
-      </div>
+      <Shell>
+        <div style={{
+          flex: 1,
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          gap: 12, padding: 24,
+        }}>
+          <span style={{ fontSize: 32 }}>⚠</span>
+          <p style={{ color: C.fgMuted, fontSize: 14, textAlign: "center", margin: 0 }}>
+            {state.message}
+          </p>
+          <button
+            type="button"
+            onClick={() => window.close()}
+            style={{
+              marginTop: 8, height: 40, padding: "0 20px",
+              borderRadius: 12, border: `1px solid ${C.cardBorder}`,
+              background: C.cardBg, color: C.fg,
+              fontSize: 14, fontWeight: 700, cursor: "pointer",
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </Shell>
     );
   }
+
+  // ── Locked ──
 
   if (state.status === "locked") {
     return (
-      <div className="simple-page" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, minHeight: 360, padding: 24 }}>
-        <span style={{ fontSize: 40 }}>🔒</span>
-        <p style={{ fontWeight: 650, fontSize: 16, margin: 0 }}>Wallet is locked</p>
-        <p style={{ color: "var(--fg-muted)", fontSize: 13, textAlign: "center", margin: 0 }}>
-          Open the SIMPL extension and unlock your wallet, then try connecting again.
-        </p>
-        <button className="icbtn" onClick={() => window.close()} style={{ marginTop: 4 }}>Close</button>
-      </div>
+      <Shell>
+        <div style={{
+          flex: 1,
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          gap: 16, padding: 24,
+        }}>
+          <span style={{ fontSize: 40 }}>🔒</span>
+          <p style={{ fontWeight: 800, fontSize: 17, margin: 0, letterSpacing: "-0.02em" }}>
+            Wallet is locked
+          </p>
+          <p style={{ color: C.fgMuted, fontSize: 13, textAlign: "center", margin: 0, lineHeight: "19px" }}>
+            Open the SIMPL extension and unlock your wallet, then try again.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.close()}
+            style={{
+              marginTop: 4, height: 46, padding: "0 24px",
+              borderRadius: 13, border: `1px solid ${C.cardBorder}`,
+              background: C.cardBg, color: C.fg,
+              fontSize: 15, fontWeight: 750, cursor: "pointer",
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </Shell>
     );
   }
 
+  // ── Ready ──
+
   const { data } = state;
   const domain = safeHostname(data.origin);
+  const kind = data.kind ?? "connect";
 
-  return (
-    <div className="simple-page" style={{ display: "flex", flexDirection: "column", minHeight: 480 }}>
+  // ── personal_sign ──
 
-      {/* Header */}
-      <div style={{ padding: "20px 20px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 13, fontWeight: 650, color: "var(--fg-muted)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-          Connect Wallet
-        </span>
-        <button
-          type="button"
-          className="icbtn"
-          onClick={reject}
-          disabled={working}
-          style={{ fontSize: 18, lineHeight: 1 }}
-          aria-label="Reject"
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Site info */}
-      <div style={{ padding: "24px 20px 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flex: 1 }}>
-        {/* Globe icon placeholder */}
-        <div style={{
-          width: 56, height: 56, borderRadius: 16,
-          background: "var(--bg-sunken)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 28,
-        }}>
-          🌐
-        </div>
-
-        <div style={{ fontWeight: 700, fontSize: 17, marginTop: 4 }}>{domain}</div>
-        <div style={{ color: "var(--fg-muted)", fontSize: 13, textAlign: "center" }}>
-          wants to connect to your wallet
-        </div>
-
-        {/* Divider */}
-        <div style={{ width: "100%", height: 1, background: "var(--border)", margin: "16px 0 8px" }} />
-
-        {/* Account row */}
-        <div style={{
-          width: "100%", padding: "12px 14px",
-          background: "var(--bg-sunken)", borderRadius: 14,
-          display: "flex", alignItems: "center", gap: 10,
-        }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 12,
-            background: "var(--fg-base)", opacity: 0.08,
-            flexShrink: 0,
-          }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, color: "var(--fg-muted)" }}>Wallet</div>
-            <div style={{
-              fontSize: 14, fontWeight: 600,
-              fontFamily: "monospace", letterSpacing: "-0.02em",
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            }}>
-              {shortAddress(data.address!)}
+  if (kind === "personal_sign") {
+    return (
+      <Shell>
+        <ApprovalHeader title="Sign message" onClose={reject} disabled={working} />
+        <ScrollSection>
+          <div style={{ display: "grid", gap: 14 }}>
+            <SimplIcon />
+            <div style={{ display: "grid", gap: 7 }}>
+              <h1 style={{
+                margin: 0, fontSize: 24, lineHeight: "27px",
+                letterSpacing: "-0.055em", fontWeight: 880,
+              }}>
+                Sign message
+              </h1>
+              <p style={{ margin: 0, color: C.fgMuted, fontSize: 13, lineHeight: "19px" }}>
+                <strong>{domain}</strong> is requesting a message signature.
+              </p>
             </div>
           </div>
+
+          <ApprovalCard>
+            <AccountRow address={data.address!} />
+            <PreviewBox title="Message preview">
+              <MonoPre text={data.displayMessage ?? ""} />
+            </PreviewBox>
+          </ApprovalCard>
+
+          <SigningWarning />
+
+          <ApprovalCard>
+            <PasswordInput
+              value={password}
+              onChange={setPassword}
+              onEnter={password.trim() ? approve : undefined}
+              disabled={working}
+            />
+            {errorMsg && <ErrorLine message={errorMsg} />}
+          </ApprovalCard>
+
+          <OriginNotice domain={domain} method="personal_sign" />
+        </ScrollSection>
+        <ApprovalFooter
+          primaryLabel="Sign"
+          onPrimary={approve}
+          onReject={reject}
+          working={working}
+          primaryDisabled={!password.trim()}
+        />
+      </Shell>
+    );
+  }
+
+  // ── typed_data ──
+
+  if (kind === "typed_data") {
+    const td = data.typedDataDisplay ?? {};
+    return (
+      <Shell>
+        <ApprovalHeader title="Sign typed data" onClose={reject} disabled={working} />
+        <ScrollSection>
+          <div style={{ display: "grid", gap: 14 }}>
+            <SimplIcon />
+            <div style={{ display: "grid", gap: 7 }}>
+              <h1 style={{
+                margin: 0, fontSize: 24, lineHeight: "27px",
+                letterSpacing: "-0.055em", fontWeight: 880,
+              }}>
+                Sign typed data
+              </h1>
+              <p style={{ margin: 0, color: C.fgMuted, fontSize: 13, lineHeight: "19px" }}>
+                <strong>{domain}</strong> is requesting a typed data signature.
+              </p>
+            </div>
+          </div>
+
+          <ApprovalCard>
+            <AccountRow address={data.address!} />
+
+            {(td.domainName || td.primaryType || td.verifyingContract) && (
+              <PreviewBox title="Details">
+                <div style={{ display: "grid", gap: 8 }}>
+                  {td.domainName && (
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                      <span style={{ color: C.fgMuted }}>App</span>
+                      <span style={{ fontWeight: 700 }}>{td.domainName}</span>
+                    </div>
+                  )}
+                  {td.primaryType && (
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                      <span style={{ color: C.fgMuted }}>Type</span>
+                      <span style={{ fontWeight: 700 }}>{td.primaryType}</span>
+                    </div>
+                  )}
+                  {td.verifyingContract && (
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                      <span style={{ color: C.fgMuted }}>Contract</span>
+                      <span style={{ fontFamily: C.monoFont, fontSize: 12 }}>
+                        {shortAddress(td.verifyingContract)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </PreviewBox>
+            )}
+
+            {td.messageJson && (
+              <PreviewBox title="Data preview">
+                <MonoPre text={td.messageJson} />
+              </PreviewBox>
+            )}
+          </ApprovalCard>
+
+          <SigningWarning />
+
+          <ApprovalCard>
+            <PasswordInput
+              value={password}
+              onChange={setPassword}
+              onEnter={password.trim() ? approve : undefined}
+              disabled={working}
+            />
+            {errorMsg && <ErrorLine message={errorMsg} />}
+          </ApprovalCard>
+
+          <OriginNotice domain={domain} method="eth_signTypedData_v4" />
+        </ScrollSection>
+        <ApprovalFooter
+          primaryLabel="Sign"
+          onPrimary={approve}
+          onReject={reject}
+          working={working}
+          primaryDisabled={!password.trim()}
+        />
+      </Shell>
+    );
+  }
+
+  // ── connect (default) ──
+
+  return (
+    <Shell>
+      <ApprovalHeader title="Connect wallet" onClose={reject} disabled={working} />
+      <ScrollSection>
+        <div style={{ display: "grid", gap: 14 }}>
           <div style={{
-            fontSize: 11, fontWeight: 650, color: "var(--secure)",
-            background: "var(--secure-bg, #e8f8ef)", padding: "3px 8px", borderRadius: 8,
+            width: 46, height: 46, borderRadius: 15,
+            background: C.cardBg,
+            border: `1px solid ${C.cardBorder}`,
+            display: "grid", placeItems: "center",
+            fontSize: 26,
           }}>
-            Active
+            🌐
+          </div>
+          <div style={{ display: "grid", gap: 7 }}>
+            <h1 style={{
+              margin: 0, fontSize: 24, lineHeight: "27px",
+              letterSpacing: "-0.055em", fontWeight: 880,
+            }}>
+              {domain}
+            </h1>
+            <p style={{ margin: 0, color: C.fgMuted, fontSize: 13, lineHeight: "19px" }}>
+              This site is requesting access to your wallet address.
+            </p>
           </div>
         </div>
 
-        {/* Network row */}
-        <div style={{
-          width: "100%", padding: "10px 14px",
-          background: "var(--bg-sunken)", borderRadius: 14,
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          <span style={{ fontSize: 13, color: "var(--fg-muted)" }}>Network</span>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{chainLabel(data.chainId)}</span>
-        </div>
+        <ApprovalCard>
+          <AccountRow address={data.address!} />
 
-        {/* Permissions summary */}
-        <div style={{
-          width: "100%", padding: "12px 14px",
-          background: "var(--bg-sunken)", borderRadius: 14,
-          marginTop: 4,
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 650, color: "var(--fg-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            Permissions
+          <div style={{
+            border: `1px solid ${C.previewBorder}`,
+            borderRadius: 13,
+            background: C.previewBg,
+            padding: 14,
+            display: "grid", gap: 10,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 850, letterSpacing: "-0.01em" }}>
+              Network
+            </div>
+            <div style={{ fontSize: 13, color: C.fgMuted }}>
+              {chainLabel(data.chainId)}
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {(["View your wallet address", "View your account balance"] as string[]).map((p) => (
-              <div key={p} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: "var(--secure)", fontSize: 14 }}>✓</span>
-                <span style={{ fontSize: 13 }}>{p}</span>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        {errorMsg && (
-          <div style={{ color: "var(--danger, #dc2626)", fontSize: 13, textAlign: "center", marginTop: 4 }}>
-            {errorMsg}
+          <div style={{
+            border: `1px solid ${C.previewBorder}`,
+            borderRadius: 13,
+            background: C.previewBg,
+            padding: 14,
+            display: "grid", gap: 10,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 850, letterSpacing: "-0.01em" }}>
+              Permissions
+            </div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {(["View your wallet address", "View your account balance"] as const).map((p) => (
+                <div key={p} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                  <span style={{ color: "#1d7a3f", fontSize: 14, fontWeight: 700 }}>✓</span>
+                  <span style={{ color: C.fgMuted }}>{p}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        )}
-      </div>
+        </ApprovalCard>
 
-      {/* Action buttons */}
-      <div style={{
-        padding: "16px 20px 24px",
-        display: "flex", gap: 10,
-      }}>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={reject}
-          disabled={working}
-          style={{ flex: 1, padding: "12px 0", borderRadius: 14, fontSize: 15, fontWeight: 650 }}
-        >
-          Reject
-        </button>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={approve}
-          disabled={working}
-          style={{ flex: 1, padding: "12px 0", borderRadius: 14, fontSize: 15, fontWeight: 650 }}
-        >
-          {working ? "Connecting…" : "Connect"}
-        </button>
-      </div>
-    </div>
+        <OriginNotice domain={domain} method="eth_requestAccounts" />
+
+        {errorMsg && <ErrorLine message={errorMsg} />}
+      </ScrollSection>
+      <ApprovalFooter
+        primaryLabel="Connect"
+        onPrimary={approve}
+        onReject={reject}
+        working={working}
+      />
+    </Shell>
   );
 }

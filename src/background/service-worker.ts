@@ -388,6 +388,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 type DappPendingApproval = {
   id: string;
   origin: string;
+  kind: "connect" | "personal_sign" | "typed_data";
+  signingParams?: { method: string; params: unknown[] };
   resolve: (result: unknown) => void;
   reject: (error: { code: number; message: string }) => void;
 };
@@ -494,6 +496,48 @@ async function saveDappConnection(origin: string): Promise<void> {
   await chrome.storage.local.set({ connectedSites: filtered });
 }
 
+function extractPersonalSignDisplay(params: unknown[]): string {
+  const stringParams = params.filter((p): p is string => typeof p === "string" && p.length > 0);
+  const addressParam = stringParams.find((p) => /^0x[a-fA-F0-9]{40}$/.test(p));
+  const rawMsg = stringParams.find((p) => p !== addressParam) ?? stringParams[0] ?? "";
+  if (!rawMsg) return "";
+  if (/^0x[0-9a-fA-F]*$/.test(rawMsg)) {
+    try {
+      const hex = rawMsg.slice(2);
+      const bytes = new Uint8Array((hex.match(/.{1,2}/g) ?? []).map((b) => parseInt(b, 16)));
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      return rawMsg;
+    }
+  }
+  return rawMsg;
+}
+
+type TypedDataDisplay = {
+  domainName?: string;
+  verifyingContract?: string;
+  primaryType?: string;
+  messageJson?: string;
+};
+
+function extractTypedDataDisplay(params: unknown[]): TypedDataDisplay {
+  try {
+    const raw = params[1];
+    const td = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!td || typeof td !== "object") return {};
+    const record = td as Record<string, unknown>;
+    const domain = record["domain"] as Record<string, unknown> | undefined;
+    return {
+      domainName: typeof domain?.["name"] === "string" ? (domain["name"] as string) : undefined,
+      verifyingContract: typeof domain?.["verifyingContract"] === "string" ? (domain["verifyingContract"] as string) : undefined,
+      primaryType: typeof record["primaryType"] === "string" ? (record["primaryType"] as string) : undefined,
+      messageJson: record["message"] ? JSON.stringify(record["message"], null, 2) : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function handleDappRequest(
   message: { method: string; params: unknown[]; origin: string },
   sendResponse: (response: unknown) => void,
@@ -548,11 +592,58 @@ async function handleDappRequest(
         pendingDappApprovals.set(approvalId, {
           id: approvalId,
           origin,
+          kind: "connect",
           resolve: (result) => sendResponse({ ok: true, result }),
           reject: (error) => sendResponse({ ok: false, error }),
         });
 
         await openDappApprovalWindow(approvalId);
+        return;
+      }
+
+      case "personal_sign": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+        if (!address) {
+          sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+        const signApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(signApprovalId, {
+          id: signApprovalId,
+          origin,
+          kind: "personal_sign",
+          signingParams: { method, params: message.params },
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(signApprovalId);
+        return;
+      }
+
+      case "eth_signTypedData_v4": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+        if (!address) {
+          sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+        const tdApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(tdApprovalId, {
+          id: tdApprovalId,
+          origin,
+          kind: "typed_data",
+          signingParams: { method, params: message.params },
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(tdApprovalId);
         return;
       }
 
@@ -612,6 +703,13 @@ chrome.runtime.onMessage.addListener(
             origin: pending.origin,
             address: bootstrap.selectedAccount?.address ?? null,
             chainId: bootstrap.walletState.selectedChainId,
+            kind: pending.kind,
+            ...(pending.kind === "personal_sign"
+              ? { displayMessage: extractPersonalSignDisplay(pending.signingParams?.params ?? []) }
+              : {}),
+            ...(pending.kind === "typed_data"
+              ? { typedDataDisplay: extractTypedDataDisplay(pending.signingParams?.params ?? []) }
+              : {}),
           },
         });
       })
@@ -636,20 +734,38 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
-    pendingDappApprovals.delete(id);
+    const password = typeof message.password === "string" ? message.password : undefined;
 
     void walletService
       .bootstrap()
       .then(async (bootstrap) => {
         const address = bootstrap.selectedAccount?.address;
         if (!address) {
+          pendingDappApprovals.delete(id);
           pending.reject({ code: 4900, message: "Wallet is locked." });
           sendResponse({ ok: false, error: "Wallet is locked." });
           return;
         }
 
-        await saveDappConnection(pending.origin);
-        pending.resolve([address]);
+        if (pending.kind === "connect") {
+          pendingDappApprovals.delete(id);
+          await saveDappConnection(pending.origin);
+          pending.resolve([address]);
+        } else if (pending.kind === "personal_sign") {
+          const result = await walletService.signSelectedPersonalMessage({
+            params: pending.signingParams?.params ?? [],
+            password,
+          });
+          pendingDappApprovals.delete(id);
+          pending.resolve(result.signature);
+        } else if (pending.kind === "typed_data") {
+          const result = await walletService.signSelectedTypedDataV4({
+            params: pending.signingParams?.params ?? [],
+            password,
+          });
+          pendingDappApprovals.delete(id);
+          pending.resolve(result.signature);
+        }
         sendResponse({ ok: true });
 
         // Close the approval window.
@@ -659,7 +775,11 @@ chrome.runtime.onMessage.addListener(
         }
       })
       .catch((err) => {
-        pending.reject({ code: -32603, message: getErrorMessage(err) });
+        // For signing kinds, keep the pending alive so the user can retry with the correct password.
+        if (pending.kind === "connect") {
+          pendingDappApprovals.delete(id);
+          pending.reject({ code: -32603, message: getErrorMessage(err) });
+        }
         sendResponse({ ok: false, error: getErrorMessage(err) });
       });
 
