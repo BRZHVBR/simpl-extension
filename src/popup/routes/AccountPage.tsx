@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import {
+  SimpleInstrumentIcon,
+  type SimpleInstrument,
+} from "../components/SimpleInstrumentIcon";
 import type {
   WalletAccount,
   WalletAccountId,
@@ -63,23 +67,6 @@ function WatchIcon() {
   );
 }
 
-function PlusIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
 
 function CheckIcon() {
   return (
@@ -234,12 +221,14 @@ function AccountRow({
 
 function ActionCard({
   icon,
+  instrument,
   title,
   subtitle,
   onClick,
   disabled,
 }: {
-  icon: ReactNode;
+  icon?: ReactNode;
+  instrument?: SimpleInstrument;
   title: string;
   subtitle: string;
   onClick: () => void;
@@ -259,7 +248,11 @@ function ActionCard({
         opacity: disabled ? 0.55 : 1,
       }}
     >
-      <div className="tok">{icon}</div>
+      {instrument ? (
+        <SimpleInstrumentIcon instrument={instrument} />
+      ) : (
+        <div className="tok">{icon}</div>
+      )}
 
       <div className="body">
         <div className="nm">{title}</div>
@@ -530,7 +523,7 @@ export function AccountPage({
 
           <div className="row-list">
             <ActionCard
-              icon={<PlusIcon />}
+              instrument="multiWallet"
               title={addingAccount ? "Adding account..." : "Add account"}
               subtitle="Create the next account from your seed phrase."
               disabled={busy}
@@ -538,7 +531,7 @@ export function AccountPage({
             />
 
             <ActionCard
-              icon={<WatchIcon />}
+              instrument="wallet"
               title="Add watch wallet"
               subtitle="Track any address without importing private keys."
               disabled={busy}

@@ -1,6 +1,8 @@
 // src/popup/routes/HomePage.tsx
 
 import { useEffect, useRef, useState } from "react";
+import { SimpleInstrumentIcon } from "../components/SimpleInstrumentIcon";
+import { AssetIcon } from "../components/AssetIcon";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
 import type { WalletAssetBalance } from "../../core/tokens/token-balance.service";
@@ -24,6 +26,14 @@ type PortfolioStatus =
   | "error";
 
 type ValuationCurrency = "USD" | "EUR" | "USDT" | "USDC" | "DAI";
+
+const CURRENCY_LABELS: Record<ValuationCurrency, string> = {
+  USD: "US Dollar",
+  EUR: "Euro",
+  USDT: "Tether USD",
+  USDC: "USD Coin",
+  DAI: "Dai Stablecoin",
+};
 
 type HomePageProps = {
   selectedAccount: WalletAccount | null;
@@ -343,6 +353,7 @@ export function HomePage(props: HomePageProps) {
   const [nativeQuote, setNativeQuote] = useState<NativeAssetQuote | null>(null);
   const [valuationCurrency, setValuationCurrency] =
     useState<ValuationCurrency>(getInitialValuationCurrency);
+  const [isValuationSelectorOpen, setIsValuationSelectorOpen] = useState(false);
   const [portfolioStatus, setPortfolioStatus] =
     useState<PortfolioStatus>("idle");
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
@@ -545,6 +556,15 @@ export function HomePage(props: HomePageProps) {
     }
   }, [valuationCurrency]);
 
+  useEffect(() => {
+    if (!isValuationSelectorOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setIsValuationSelectorOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isValuationSelectorOpen]);
+
   if (!props.selectedAccount) {
     return (
       <div className="ext-popup" data-screen-label="03 Home">
@@ -625,22 +645,15 @@ export function HomePage(props: HomePageProps) {
               {isSyncing ? "Syncing..." : formatUpdatedAt(updatedAt)}
             </div>
 
-            <label className="valuation-select" aria-label="Valuation currency">
+            <button
+              type="button"
+              className="valuation-selector-pill"
+              onClick={() => setIsValuationSelectorOpen(true)}
+              aria-label={`Value in ${valuationCurrency}. Click to change.`}
+            >
               <span>Value in</span>
-
-              <select
-                value={valuationCurrency}
-                onChange={(event) =>
-                  setValuationCurrency(event.target.value as ValuationCurrency)
-                }
-              >
-                {VALUATION_CURRENCIES.map((currency) => (
-                  <option key={currency} value={currency}>
-                    {currency}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <strong>{valuationCurrency}</strong>
+            </button>
           </div>
         </div>
 
@@ -653,28 +666,21 @@ export function HomePage(props: HomePageProps) {
             }}
             disabled={!defaultSendAsset}
           >
-            <Icon name="send" />
+            <SimpleInstrumentIcon instrument="send" iconSize={16} />
             <span className="a-lbl">Send</span>
           </button>
 
           <button className="action" type="button" onClick={props.onReceive}>
-            <Icon name="receive" />
+            <SimpleInstrumentIcon instrument="receive" iconSize={16} />
             <span className="a-lbl">Receive</span>
           </button>
 
           <button className="action" type="button" onClick={props.onSwap}>
-            <Icon name="swap" />
+            <SimpleInstrumentIcon instrument="swap" iconSize={16} />
             <span className="a-lbl">Swap</span>
           </button>
 
-          <button
-            className="action"
-            type="button"
-            onClick={props.onAddCustomToken}
-          >
-            <Icon name="plus" />
-            <span className="a-lbl">Token</span>
-          </button>
+          
         </div>
 
         {portfolioStatus === "error" && portfolioError ? (
@@ -696,13 +702,20 @@ export function HomePage(props: HomePageProps) {
         <div className="sect-head">
           <div className="lbl">Assets</div>
 
-          <button
-            className="link"
-            type="button"
-            onClick={props.onAddCustomToken}
-          >
-            + Token
-          </button>
+          <div className="assets-header-actions">
+            <button type="button" className="assets-header-action" onClick={props.onHistory}>
+              <Icon name="history" />
+              <span>History</span>
+            </button>
+
+            <button
+              className="link"
+              type="button"
+              onClick={props.onAddCustomToken}
+            >
+              + Token
+            </button>
+          </div>
         </div>
 
         <div className="row-list">
@@ -732,9 +745,7 @@ export function HomePage(props: HomePageProps) {
                   textAlign: "left",
                 }}
               >
-                <div className="tok">
-                  {asset.symbol.slice(0, 1).toUpperCase()}
-                </div>
+                <AssetIcon ticker={asset.symbol} logoURI={asset.logoUrl} size={44} />
 
                 <div className="body">
                   <div className="nm">{asset.name}</div>
@@ -785,44 +796,52 @@ export function HomePage(props: HomePageProps) {
         </div>
       </div>
 
-      <div className="bar-bottom">
-        <button className="nav-item active" type="button">
-          <Icon name="wallet" />
-          Wallet
-        </button>
-
-        <button
-          className="nav-item"
-          type="button"
-          onClick={() => {
-            if (defaultSendAsset) props.onSendAsset(defaultSendAsset);
-          }}
-          disabled={!defaultSendAsset}
+      {isValuationSelectorOpen && (
+        <div
+          className="valuation-modal-backdrop"
+          onClick={() => setIsValuationSelectorOpen(false)}
         >
-          <Icon name="send" />
-          Send
-        </button>
+          <div
+            className="valuation-modal-panel"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="valuation-modal-header">
+              <div className="valuation-modal-header__text">
+                <span className="valuation-modal-title">Select value currency</span>
+                <span className="valuation-modal-subtitle">Choose how to display portfolio values.</span>
+              </div>
+              <button
+                type="button"
+                className="valuation-modal-close"
+                onClick={() => setIsValuationSelectorOpen(false)}
+                aria-label="Close"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
 
-        <button className="nav-item" type="button" onClick={props.onSwap}>
-          <Icon name="swap" />
-          Swap
-        </button>
-
-        <button className="nav-item" type="button" onClick={props.onHistory}>
-          <Icon name="history" />
-          History
-        </button>
-
-        <button className="nav-item" type="button" onClick={props.onReceive}>
-          <Icon name="receive" />
-          Receive
-        </button>
-
-        <button className="nav-item" type="button" onClick={props.onSettings}>
-          <SettingsIcon />
-          Settings
-        </button>
-      </div>
+            {VALUATION_CURRENCIES.map((currency) => (
+              <button
+                key={currency}
+                type="button"
+                className={`valuation-modal-option${currency === valuationCurrency ? " valuation-modal-option--active" : ""}`}
+                onClick={() => {
+                  setValuationCurrency(currency);
+                  setIsValuationSelectorOpen(false);
+                }}
+              >
+                <span className="valuation-modal-option__check">
+                  {currency === valuationCurrency && (
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L19 7"/></svg>
+                  )}
+                </span>
+                <span className="valuation-modal-option__label">{currency}</span>
+                <span className="valuation-modal-option__desc">{CURRENCY_LABELS[currency]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

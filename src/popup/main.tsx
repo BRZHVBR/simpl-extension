@@ -6,13 +6,8 @@ import "../design-system/colors_and_type.css";
 import "../design-system/ui_kits/extension/styles.css";
 import "../ui/claude/styles/runtime-overrides.css";
 
-const searchParams = new URLSearchParams(window.location.search);
-const surface = searchParams.get("surface");
-
-if (surface === "fullscreen") {
+if (new URLSearchParams(window.location.search).get("surface") === "fullscreen") {
   document.documentElement.setAttribute("data-simple-surface", "fullscreen");
-} else {
-  document.documentElement.removeAttribute("data-simple-surface");
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

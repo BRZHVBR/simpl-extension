@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import { walletService } from "../../core/wallet/wallet.service";
+import {
+  SimpleInstrumentIcon,
+  type SimpleInstrument,
+} from "../components/SimpleInstrumentIcon";
 
 import SeedBackupVerificationPage from "./SeedBackupVerificationPage";
 import ConnectedSitesPage from "./ConnectedSitesPage";
@@ -509,67 +513,14 @@ function BackIcon() {
   return <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>;
 }
 
-function ShieldIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M12 3.2 5.5 5.8v5.4c0 4.1 2.6 7.8 6.5 9.2 3.9-1.4 6.5-5.1 6.5-9.2V5.8L12 3.2Z"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinejoin="round"
-      />
-      <path
-        d="m8.7 12 2.2 2.2 4.7-5"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function WarningIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M12 7.5v6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M12 17.2h.01"
-        stroke="currentColor"
-        strokeWidth="2.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function ScoreIcon({ score }: { score: number }) {
-  return (
-    <span
-      style={{
-        color: "#ffffff",
-        fontSize: 14,
-        lineHeight: "18px",
-        fontWeight: 900,
-        letterSpacing: "-0.04em",
-      }}
-    >
-      {score}
-    </span>
-  );
-}
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return <div style={styles.sectionLabel}>{children}</div>;
 }
 
 type RowProps = {
-  icon: ReactNode;
+  icon?: ReactNode;
+  instrument?: SimpleInstrument;
   title: string;
   subtitle?: string;
   value?: string;
@@ -577,10 +528,14 @@ type RowProps = {
   onClick?: () => void | Promise<void>;
 };
 
-function Row({ icon, title, subtitle, value, valueColor, onClick }: RowProps) {
+function Row({ icon, instrument, title, subtitle, value, valueColor, onClick }: RowProps) {
   const body = (
     <>
-      <div className="tok">{icon}</div>
+      {instrument ? (
+        <SimpleInstrumentIcon instrument={instrument} />
+      ) : (
+        <div className="tok">{icon}</div>
+      )}
 
       <div className="body">
         <div className="nm">{title}</div>
@@ -944,7 +899,7 @@ export default function SecurityCenterPage({
   const renderCheckRow = (check: SecurityCheck) => (
     <Row
       key={check.id}
-      icon={check.status === "secure" ? <ShieldIcon /> : <WarningIcon />}
+      instrument="security"
       title={check.title}
       subtitle={check.subtitle}
       value={check.value}
@@ -988,7 +943,7 @@ export default function SecurityCenterPage({
         <section style={styles.scoreCard}>
           <div className="row-list">
             <Row
-              icon={<ScoreIcon score={isLoading ? 0 : normalizedScore} />}
+              instrument="security"
               title={isLoading ? "Checking" : getScoreLabel(normalizedScore)}
               subtitle={isLoading ? "Reading local wallet settings." : getScoreDescription(normalizedScore)}
               value={isLoading ? "…" : `${normalizedScore}/100`}
@@ -1007,7 +962,7 @@ export default function SecurityCenterPage({
               .map(renderCheckRow)}
 
             <Row
-              icon={<ShieldIcon />}
+              instrument="security"
               title="Lock wallet"
               subtitle="Return to unlock screen."
               value="›"
@@ -1037,7 +992,7 @@ export default function SecurityCenterPage({
               .map(renderCheckRow)}
 
             <Row
-              icon={<ShieldIcon />}
+              instrument="dapps"
               title="Connected sites"
               subtitle="Review websites that can request wallet access."
               value="0"
@@ -1046,7 +1001,7 @@ export default function SecurityCenterPage({
             />
 
             <Row
-              icon={<ShieldIcon />}
+              instrument="security"
               title="Token approvals"
               subtitle="Review contract spending permissions."
               value="Soon"
@@ -1159,7 +1114,7 @@ export default function SecurityCenterPage({
                   return (
                     <Row
                       key={minutes}
-                      icon={<ShieldIcon />}
+                      instrument="security"
                       title={`${minutes} min`}
                       subtitle={
                         minutes <= 5

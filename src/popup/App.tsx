@@ -10,6 +10,7 @@ import { CreateWalletPage } from "./routes/CreateWalletPage";
 import { ImportWalletPage } from "./routes/ImportWalletPage";
 import { UnlockPage } from "./routes/UnlockPage";
 import { HomePage } from "./routes/HomePage";
+import { TransactionHistoryPage } from "./routes/TransactionHistoryPage";
 import { AccountPage } from "./routes/AccountPage";
 import { AddWatchWalletPage } from "./routes/AddWatchWalletPage";
 import { AddCustomTokenPage } from "./routes/AddCustomTokenPage";
@@ -35,7 +36,8 @@ export type PopupRoute =
   | "add-custom-token"
   | "reveal-seed"
   | "reveal-private-key"
-  | "settings";
+  | "settings"
+  | "transaction-history";
 
 export type PopupViewState = {
   runtimeState: WalletRuntimeState;
@@ -213,7 +215,7 @@ export function App() {
     onAddCustomToken={() => setRoute("add-custom-token")}
     onSendAsset={openSendPage}
     onRefresh={refresh}
-    onHistory={() => undefined}
+    onHistory={() => setRoute("transaction-history")}
   />
 );
 
@@ -229,6 +231,20 @@ export function App() {
       onBack={() => setRoute("home")}
     />
   );
+
+
+      case "transaction-history":
+        if (!viewState?.selectedAccount || !viewState.walletState) {
+          return null;
+        }
+
+        return (
+          <TransactionHistoryPage
+            selectedAccount={viewState.selectedAccount}
+            walletState={viewState.walletState}
+            onBack={() => setRoute("home")}
+          />
+        );
 
       case "send":
         if (
@@ -337,11 +353,36 @@ export function App() {
     }
   }
 
+  const surface =
+    new URLSearchParams(window.location.search).get("surface") === "fullscreen"
+      ? "fullscreen"
+      : "popup";
+
+  const isFullscreen = surface === "fullscreen";
+  const routeContent = renderRoute();
+
   return (
-    <div className="popup-app-shell">
-      <main className="popup-app-frame" data-route={route}>
-        {renderRoute()}
-      </main>
+    <div className={`app-root app-root--${surface}`} data-surface={surface}>
+      {isFullscreen ? (
+        <div className="fullscreen-shell">
+          <div className="fullscreen-brand" aria-hidden="true">
+            <div className="fullscreen-brand__title">SIMPL Wallet</div>
+            <div className="fullscreen-brand__subtitle">
+              Self-custody wallet for everyday crypto.
+            </div>
+          </div>
+
+          <main className="fullscreen-wallet-frame" data-route={route}>
+            {routeContent}
+          </main>
+        </div>
+      ) : (
+        <div className="popup-app-shell">
+          <main className="popup-app-frame" data-route={route}>
+            {routeContent}
+          </main>
+        </div>
+      )}
     </div>
   );
 }

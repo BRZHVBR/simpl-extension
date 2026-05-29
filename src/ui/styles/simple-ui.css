@@ -2318,3 +2318,167 @@ html[data-simple-surface="sidepanel"] .simple-sidepanel-toggle {
 .simple-asset-row__fiat--muted {
   color: var(--simple-text-muted);
 }
+
+/* ============================================================
+   INSTRUMENT ICON — SEMANTIC PALETTE
+   ============================================================ */
+
+:root {
+  --simple-color-wallet-bg: #f1f1ee;
+  --simple-color-wallet-fg: #2c2c29;
+
+  --simple-color-send-bg: #eaf2ff;
+  --simple-color-send-fg: #2563eb;
+
+  --simple-color-receive-bg: #eaf8ef;
+  --simple-color-receive-fg: #2f7d46;
+
+  --simple-color-swap-bg: #f1eafe;
+  --simple-color-swap-fg: #7c3aed;
+
+  --simple-color-buy-bg: #e8f8f1;
+  --simple-color-buy-fg: #059669;
+
+  --simple-color-bank-bg: #eef2ff;
+  --simple-color-bank-fg: #4f46e5;
+
+  --simple-color-history-bg: #fff6df;
+  --simple-color-history-fg: #b7791f;
+
+  --simple-color-security-bg: #fff0f0;
+  --simple-color-security-fg: #dc2626;
+
+  --simple-color-address-bg: #e6f7f5;
+  --simple-color-address-fg: #0f766e;
+
+  --simple-color-network-bg: #e8f7fb;
+  --simple-color-network-fg: #0891b2;
+
+  --simple-color-settings-bg: #f1f1f1;
+  --simple-color-settings-fg: #525252;
+
+  --simple-color-portfolio-bg: #eef9df;
+  --simple-color-portfolio-fg: #4d7c0f;
+
+  --simple-color-multi-bg: #fff1e6;
+  --simple-color-multi-fg: #ea580c;
+
+  --simple-color-ledger-bg: #eef0f3;
+  --simple-color-ledger-fg: #334155;
+
+  --simple-color-dapps-bg: #f3e8ff;
+  --simple-color-dapps-fg: #9333ea;
+
+  --simple-color-ai-bg: #fdf2f8;
+  --simple-color-ai-fg: #db2777;
+
+  --simple-color-token-bg: #fff7ed;
+  --simple-color-token-fg: #c2410c;
+
+  --simple-color-activity-bg: #ecfeff;
+  --simple-color-activity-fg: #0e7490;
+
+  --simple-color-support-bg: #f0fdf4;
+  --simple-color-support-fg: #15803d;
+
+  --simple-color-developer-bg: #f5f3ff;
+  --simple-color-developer-fg: #6d28d9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --simple-color-wallet-bg: #252522;
+    --simple-color-wallet-fg: #f4f4ef;
+
+    --simple-color-send-bg: #13233f;
+    --simple-color-send-fg: #7db3ff;
+
+    --simple-color-receive-bg: #102b1b;
+    --simple-color-receive-fg: #7fd99a;
+
+    --simple-color-swap-bg: #24153e;
+    --simple-color-swap-fg: #c4a1ff;
+
+    --simple-color-buy-bg: #0d2d21;
+    --simple-color-buy-fg: #74e0b2;
+
+    --simple-color-bank-bg: #171d3d;
+    --simple-color-bank-fg: #a5b4fc;
+
+    --simple-color-history-bg: #33260d;
+    --simple-color-history-fg: #f6c76b;
+
+    --simple-color-security-bg: #391313;
+    --simple-color-security-fg: #ff8a8a;
+
+    --simple-color-address-bg: #102d2a;
+    --simple-color-address-fg: #7ddbd0;
+
+    --simple-color-network-bg: #0f2a32;
+    --simple-color-network-fg: #7dd3fc;
+
+    --simple-color-settings-bg: #242424;
+    --simple-color-settings-fg: #d4d4d4;
+
+    --simple-color-portfolio-bg: #1d2e10;
+    --simple-color-portfolio-fg: #bef264;
+
+    --simple-color-multi-bg: #351e0d;
+    --simple-color-multi-fg: #fdba74;
+
+    --simple-color-ledger-bg: #1e293b;
+    --simple-color-ledger-fg: #cbd5e1;
+
+    --simple-color-dapps-bg: #2a173d;
+    --simple-color-dapps-fg: #d8b4fe;
+
+    --simple-color-ai-bg: #3a1530;
+    --simple-color-ai-fg: #f9a8d4;
+
+    --simple-color-token-bg: #331a0a;
+    --simple-color-token-fg: #fdba74;
+
+    --simple-color-activity-bg: #0e2a30;
+    --simple-color-activity-fg: #67e8f9;
+
+    --simple-color-support-bg: #0f2a18;
+    --simple-color-support-fg: #86efac;
+
+    --simple-color-developer-bg: #20163a;
+    --simple-color-developer-fg: #c4b5fd;
+  }
+}
+
+/* INSTRUMENT ICON CHIP */
+
+.simple-instrument-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.simple-instrument-icon--wallet   { background: var(--simple-color-wallet-bg);    color: var(--simple-color-wallet-fg); }
+.simple-instrument-icon--send     { background: var(--simple-color-send-bg);      color: var(--simple-color-send-fg); }
+.simple-instrument-icon--receive  { background: var(--simple-color-receive-bg);   color: var(--simple-color-receive-fg); }
+.simple-instrument-icon--swap     { background: var(--simple-color-swap-bg);      color: var(--simple-color-swap-fg); }
+.simple-instrument-icon--buy      { background: var(--simple-color-buy-bg);       color: var(--simple-color-buy-fg); }
+.simple-instrument-icon--bank     { background: var(--simple-color-bank-bg);      color: var(--simple-color-bank-fg); }
+.simple-instrument-icon--history  { background: var(--simple-color-history-bg);   color: var(--simple-color-history-fg); }
+.simple-instrument-icon--security { background: var(--simple-color-security-bg);  color: var(--simple-color-security-fg); }
+.simple-instrument-icon--address  { background: var(--simple-color-address-bg);   color: var(--simple-color-address-fg); }
+.simple-instrument-icon--network  { background: var(--simple-color-network-bg);   color: var(--simple-color-network-fg); }
+.simple-instrument-icon--settings { background: var(--simple-color-settings-bg);  color: var(--simple-color-settings-fg); }
+.simple-instrument-icon--portfolio{ background: var(--simple-color-portfolio-bg); color: var(--simple-color-portfolio-fg); }
+.simple-instrument-icon--multi    { background: var(--simple-color-multi-bg);     color: var(--simple-color-multi-fg); }
+.simple-instrument-icon--ledger   { background: var(--simple-color-ledger-bg);    color: var(--simple-color-ledger-fg); }
+.simple-instrument-icon--dapps    { background: var(--simple-color-dapps-bg);     color: var(--simple-color-dapps-fg); }
+.simple-instrument-icon--ai       { background: var(--simple-color-ai-bg);        color: var(--simple-color-ai-fg); }
+.simple-instrument-icon--token    { background: var(--simple-color-token-bg);     color: var(--simple-color-token-fg); }
+.simple-instrument-icon--activity { background: var(--simple-color-activity-bg);  color: var(--simple-color-activity-fg); }
+.simple-instrument-icon--support  { background: var(--simple-color-support-bg);   color: var(--simple-color-support-fg); }
+.simple-instrument-icon--developer{ background: var(--simple-color-developer-bg); color: var(--simple-color-developer-fg); }

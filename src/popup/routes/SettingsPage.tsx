@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import type { WalletState } from "../../core/storage/storage.types";
+import {
+  SimpleInstrumentIcon,
+  type SimpleInstrument,
+} from "../components/SimpleInstrumentIcon";
 import { walletService } from "../../core/wallet/wallet.service";
 import { storageRepository } from "../../core/storage/storage.repository";
 import { nativeMessagingClient } from "../../core/native/native-messaging.client";
@@ -153,13 +157,15 @@ function Chevron() {
 
 function Row({
   icon,
+  instrument,
   title,
   subtitle,
   value,
   danger,
   onClick,
 }: {
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
+  instrument?: SimpleInstrument;
   title: string;
   subtitle?: string;
   value?: string;
@@ -179,19 +185,23 @@ function Row({
         cursor: onClick ? "pointer" : "default",
       }}
     >
-      <div
-        className="tok"
-        style={
-          danger
-            ? {
-                background: "var(--danger-soft)",
-                color: "var(--danger)",
-              }
-            : undefined
-        }
-      >
-        {icon}
-      </div>
+      {instrument ? (
+        <SimpleInstrumentIcon instrument={instrument} />
+      ) : (
+        <div
+          className="tok"
+          style={
+            danger
+              ? {
+                  background: "var(--danger-soft)",
+                  color: "var(--danger)",
+                }
+              : undefined
+          }
+        >
+          {icon}
+        </div>
+      )}
 
       <div className="body">
         <div
@@ -542,6 +552,7 @@ export function SettingsPage({
           <div className="row-list">
             <Row
               icon={<CrosshairIcon />}
+              instrument="networks"
               title={activeChain.name}
               subtitle={activeChain.subtitle}
               value="Change"
@@ -556,6 +567,7 @@ export function SettingsPage({
           <div className="row-list">
             <Row
               icon={<PanelIcon />}
+              instrument="settings"
               title="Open side panel"
               subtitle="Use SIMPLE as a slide-out browser panel."
               onClick={() => void openSidePanel()}
@@ -563,6 +575,7 @@ export function SettingsPage({
 
             <Row
               icon={<SquareIcon />}
+              instrument="settings"
               title="Open full screen"
               subtitle="Open SIMPLE in a dedicated browser tab."
               onClick={openFullscreenApp}
@@ -576,14 +589,15 @@ export function SettingsPage({
           <div className="row-list">
             <Row
               icon={<ShieldIcon />}
+              instrument="security"
               title="Security Center"
               subtitle="Review wallet protection and recovery status."
               onClick={() => setShowSecurityCenter(true)}
             />
 
-            
             <Row
               icon={<ShieldIcon />}
+              instrument="security"
               title="Touch ID"
               subtitle="Biometric unlock on this device."
               value={biometricEnabled ? "Enabled" : "Disabled"}
@@ -591,6 +605,7 @@ export function SettingsPage({
 
             <Row
               icon={<ShieldIcon />}
+              instrument="security"
               title="Check macOS Keychain Host"
               subtitle="Verify native Touch ID integration."
               onClick={() => void checkNativeHost()}
@@ -642,6 +657,7 @@ export function SettingsPage({
           <div className="row-list">
             <Row
               icon={<KeyIcon />}
+              instrument="security"
               title="Reveal seed phrase"
               subtitle="Show wallet recovery phrase."
               onClick={onRevealSeed}
@@ -649,6 +665,7 @@ export function SettingsPage({
 
             <Row
               icon={<KeyIcon />}
+              instrument="security"
               title="Reveal private key"
               subtitle="Show selected account private key."
               onClick={onRevealPrivateKey}
@@ -662,6 +679,7 @@ export function SettingsPage({
           <div className="row-list">
             <Row
               icon={<ShieldIcon />}
+              instrument="security"
               title="Lock wallet"
               subtitle="Return to unlock screen."
               onClick={() => void lockWallet()}
@@ -669,6 +687,7 @@ export function SettingsPage({
 
             <Row
               icon={<TrashIcon />}
+              instrument="security"
               title="Clear wallet from browser"
               subtitle="Remove local encrypted wallet data."
               danger
