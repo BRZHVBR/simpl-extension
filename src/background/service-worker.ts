@@ -389,9 +389,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 type DappPendingApproval = {
   id: string;
   origin: string;
-  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain";
+  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain" | "transaction";
   signingParams?: { method: string; params: unknown[] };
   switchChainId?: number;
+  transactionParams?: {
+    from: string;
+    to: string;
+    value?: string;
+    data?: string;
+    gas?: string;
+    gasPrice?: string;
+  };
   resolve: (result: unknown) => void;
   reject: (error: { code: number; message: string }) => void;
 };
@@ -706,6 +714,55 @@ async function handleDappRequest(
         return;
       }
 
+      case "eth_sendTransaction": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized: connect wallet first." } });
+          return;
+        }
+        if (!address) {
+          sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+
+        const txParam = message.params[0] as Record<string, unknown> | undefined;
+        if (!txParam || typeof txParam !== "object") {
+          sendResponse({ ok: false, error: { code: -32602, message: "Invalid transaction parameters." } });
+          return;
+        }
+
+        const txTo = typeof txParam["to"] === "string" ? txParam["to"] : null;
+        if (!txTo) {
+          sendResponse({ ok: false, error: { code: -32602, message: "Invalid transaction parameters." } });
+          return;
+        }
+
+        const txFrom = typeof txParam["from"] === "string" ? txParam["from"] : null;
+        if (txFrom && txFrom.toLowerCase() !== address.toLowerCase()) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Transaction from address does not match active account." } });
+          return;
+        }
+
+        const txApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(txApprovalId, {
+          id: txApprovalId,
+          origin,
+          kind: "transaction",
+          transactionParams: {
+            from: txFrom ?? address,
+            to: txTo,
+            value: typeof txParam["value"] === "string" ? txParam["value"] : undefined,
+            data: typeof txParam["data"] === "string" ? txParam["data"] : undefined,
+            gas: typeof txParam["gas"] === "string" ? txParam["gas"] : undefined,
+            gasPrice: typeof txParam["gasPrice"] === "string" ? txParam["gasPrice"] : undefined,
+          },
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(txApprovalId);
+        return;
+      }
+
       default: {
         sendResponse({
           ok: false,
@@ -779,6 +836,18 @@ chrome.runtime.onMessage.addListener(
                   },
                 }
               : {}),
+            ...(pending.kind === "transaction" && pending.transactionParams
+              ? {
+                  transaction: {
+                    from: pending.transactionParams.from,
+                    to: pending.transactionParams.to,
+                    value: pending.transactionParams.value ?? "0x0",
+                    data: pending.transactionParams.data,
+                    networkName: getChainById(bootstrap.walletState.selectedChainId)?.name ?? `Chain ${bootstrap.walletState.selectedChainId}`,
+                    nativeCurrencySymbol: getChainById(bootstrap.walletState.selectedChainId)?.nativeCurrency.symbol ?? "ETH",
+                  },
+                }
+              : {}),
           },
         });
       })
@@ -839,6 +908,19 @@ chrome.runtime.onMessage.addListener(
           pendingDappApprovals.delete(id);
           pending.resolve(null);
           await broadcastProviderEvent("chainChanged", `0x${pending.switchChainId.toString(16)}`);
+        } else if (pending.kind === "transaction" && pending.transactionParams) {
+          const result = await walletService.sendSelectedPreparedTransaction({
+            transaction: {
+              to: pending.transactionParams.to,
+              value: pending.transactionParams.value,
+              data: pending.transactionParams.data,
+              gas: pending.transactionParams.gas,
+              gasPrice: pending.transactionParams.gasPrice,
+            },
+            password,
+          });
+          pendingDappApprovals.delete(id);
+          pending.resolve(result.hash);
         }
         sendResponse({ ok: true });
 
@@ -849,8 +931,8 @@ chrome.runtime.onMessage.addListener(
         }
       })
       .catch((err) => {
-        // Signing kinds keep pending alive so the user can retry with the correct password.
-        // Non-signing kinds (connect, switch_chain) have no retry — reject and clean up.
+        // connect and switch_chain have no retry — reject and clean up immediately.
+        // personal_sign, typed_data, and transaction keep pending alive for password retry.
         if (pending.kind === "connect" || pending.kind === "switch_chain") {
           pendingDappApprovals.delete(id);
           pending.reject({ code: -32603, message: getErrorMessage(err) });

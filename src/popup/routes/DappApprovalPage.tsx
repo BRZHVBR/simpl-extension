@@ -19,14 +19,24 @@ type SwitchChainData = {
   currentChainName: string;
 };
 
+type TransactionDisplayData = {
+  from: string;
+  to: string;
+  value: string;
+  data?: string;
+  networkName: string;
+  nativeCurrencySymbol: string;
+};
+
 type PendingData = {
   origin: string;
   address: string | null;
   chainId: number;
-  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain";
+  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain" | "transaction";
   displayMessage?: string;
   typedDataDisplay?: TypedDataDisplay;
   switchChain?: SwitchChainData;
+  transaction?: TransactionDisplayData;
 };
 
 type PageState =
@@ -56,6 +66,18 @@ function safeHostname(origin: string): string {
     return new URL(origin).hostname;
   } catch {
     return origin;
+  }
+}
+
+function formatHexEth(hexValue: string, symbol: string): string {
+  try {
+    const wei = BigInt(hexValue);
+    if (wei === 0n) return `0 ${symbol}`;
+    const eth = Number(wei) / 1e18;
+    const formatted = eth < 0.000001 ? "< 0.000001" : eth.toFixed(6).replace(/\.?0+$/, "");
+    return `${formatted} ${symbol}`;
+  } catch {
+    return `${hexValue} (raw)`;
   }
 }
 
@@ -324,6 +346,21 @@ function SigningWarning() {
   );
 }
 
+function TransactionWarning() {
+  return (
+    <div style={{
+      borderRadius: 14,
+      background: C.warnBg,
+      border: `1px solid ${C.warnBorder}`,
+      color: C.warnText,
+      padding: "10px 12px",
+      fontSize: 12, lineHeight: "17px", fontWeight: 750,
+    }}>
+      You are about to send a transaction. This action cannot be undone and may result in loss of funds.
+    </div>
+  );
+}
+
 function OriginNotice({ domain, method }: { domain: string; method: string }) {
   return (
     <div style={{
@@ -438,7 +475,7 @@ export default function DappApprovalPage() {
     if (state.status !== "ready") return;
     setWorking(true);
     setErrorMsg("");
-    const needsPassword = state.data.kind === "personal_sign" || state.data.kind === "typed_data";
+    const needsPassword = state.data.kind === "personal_sign" || state.data.kind === "typed_data" || state.data.kind === "transaction";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (chrome as any).runtime.sendMessage(
       {
@@ -675,6 +712,100 @@ export default function DappApprovalPage() {
         </ScrollSection>
         <ApprovalFooter
           primaryLabel="Sign"
+          onPrimary={approve}
+          onReject={reject}
+          working={working}
+          primaryDisabled={!password.trim()}
+        />
+      </Shell>
+    );
+  }
+
+  // ── transaction ──
+
+  if (kind === "transaction") {
+    const tx = data.transaction;
+    const symbol = tx?.nativeCurrencySymbol ?? "ETH";
+    const hasData = tx?.data && tx.data !== "0x" && tx.data.length > 2;
+    return (
+      <Shell>
+        <ApprovalHeader title="Confirm transaction" onClose={reject} disabled={working} />
+        <ScrollSection>
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{
+              width: 46, height: 46, borderRadius: 15,
+              background: C.cardBg, border: `1px solid ${C.cardBorder}`,
+              display: "grid", placeItems: "center", fontSize: 22,
+            }}>
+              ⬆
+            </div>
+            <div style={{ display: "grid", gap: 7 }}>
+              <h1 style={{
+                margin: 0, fontSize: 24, lineHeight: "27px",
+                letterSpacing: "-0.055em", fontWeight: 880,
+              }}>
+                Confirm transaction
+              </h1>
+              <p style={{ margin: 0, color: C.fgMuted, fontSize: 13, lineHeight: "19px" }}>
+                <strong>{domain}</strong> is requesting to send a transaction.
+              </p>
+            </div>
+          </div>
+
+          <ApprovalCard>
+            <AccountRow address={data.address!} />
+
+            <PreviewBox title="Transaction details">
+              <div style={{ display: "grid", gap: 8 }}>
+                {tx && (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
+                      <span style={{ color: C.fgMuted, flexShrink: 0 }}>To</span>
+                      <span style={{ fontWeight: 700, fontFamily: C.monoFont, fontSize: 12, textAlign: "right", wordBreak: "break-all" }}>
+                        {tx.to}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                      <span style={{ color: C.fgMuted }}>Network</span>
+                      <span style={{ fontWeight: 700 }}>{tx.networkName}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                      <span style={{ color: C.fgMuted }}>Value</span>
+                      <span style={{ fontWeight: 700 }}>{formatHexEth(tx.value, symbol)}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </PreviewBox>
+
+            {hasData && tx?.data && (
+              <PreviewBox title="Contract data">
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: C.fgMuted }}>
+                    Function: <span style={{ fontFamily: C.monoFont, color: C.fg }}>{tx.data.slice(0, 10)}</span>
+                  </div>
+                  <MonoPre text={tx.data.length > 200 ? `${tx.data.slice(0, 200)}…` : tx.data} />
+                </div>
+              </PreviewBox>
+            )}
+          </ApprovalCard>
+
+          <TransactionWarning />
+
+          <ApprovalCard>
+            <PasswordInput
+              value={password}
+              onChange={setPassword}
+              onEnter={password.trim() ? approve : undefined}
+              disabled={working}
+            />
+            {errorMsg && <ErrorLine message={errorMsg} />}
+          </ApprovalCard>
+
+          <OriginNotice domain={domain} method="eth_sendTransaction" />
+        </ScrollSection>
+        <ApprovalFooter
+          primaryLabel="Confirm"
           onPrimary={approve}
           onReject={reject}
           working={working}
