@@ -377,3 +377,317 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   return false;
 });
+
+
+// =============================================================
+//  dApp Injected Provider — Connect MVP
+//  Handles: eth_accounts, eth_chainId, net_version,
+//           eth_requestAccounts (opens approval popup)
+// =============================================================
+
+type DappPendingApproval = {
+  id: string;
+  origin: string;
+  resolve: (result: unknown) => void;
+  reject: (error: { code: number; message: string }) => void;
+};
+
+const pendingDappApprovals = new Map<string, DappPendingApproval>();
+let dappApprovalWindowId: number | null = null;
+
+// Reject all pending dApp approvals — called when the approval window is closed.
+function rejectAllPendingDappApprovals(): void {
+  for (const pending of pendingDappApprovals.values()) {
+    pending.reject({ code: 4001, message: "User rejected the request." });
+  }
+  pendingDappApprovals.clear();
+}
+
+chrome.windows?.onRemoved?.addListener((windowId: number) => {
+  if (dappApprovalWindowId === windowId) {
+    dappApprovalWindowId = null;
+    rejectAllPendingDappApprovals();
+  }
+});
+
+async function openDappApprovalWindow(approvalId: string): Promise<void> {
+  const url = chrome.runtime.getURL(`dapp-approval.html?id=${approvalId}`);
+  const popupWidth = 400;
+  const popupHeight = 580;
+
+  let left: number | undefined;
+  let top: number | undefined;
+
+  try {
+    const win = await chrome.windows.getLastFocused();
+    if (
+      typeof win.left === "number" &&
+      typeof win.top === "number" &&
+      typeof win.width === "number"
+    ) {
+      left = Math.max(0, win.left + win.width - popupWidth - 24);
+      top = Math.max(0, win.top + 72);
+    }
+  } catch {
+    // ignore — positioning is best-effort
+  }
+
+  // If there's already an open dApp approval window, focus it instead of opening a new one.
+  if (dappApprovalWindowId !== null) {
+    try {
+      await chrome.windows.update(dappApprovalWindowId, { focused: true });
+      return;
+    } catch {
+      dappApprovalWindowId = null;
+    }
+  }
+
+  const created = await chrome.windows.create({
+    url,
+    type: "popup",
+    width: popupWidth,
+    height: popupHeight,
+    focused: true,
+    ...(typeof left === "number" ? { left } : {}),
+    ...(typeof top === "number" ? { top } : {}),
+  });
+
+  dappApprovalWindowId = created?.id ?? null;
+}
+
+// Read the connectedSites array from storage (same format as ConnectedSitesPage).
+async function getDappConnectionForOrigin(origin: string): Promise<boolean> {
+  const stored = await chrome.storage.local.get("connectedSites");
+  const sites = stored["connectedSites"];
+  if (!Array.isArray(sites)) return false;
+  return sites.some(
+    (s: unknown) =>
+      s !== null &&
+      typeof s === "object" &&
+      (s as Record<string, unknown>)["origin"] === origin,
+  );
+}
+
+// Save a new connection to the connectedSites array (same format as ConnectedSitesPage).
+async function saveDappConnection(origin: string): Promise<void> {
+  const stored = await chrome.storage.local.get("connectedSites");
+  const existing = Array.isArray(stored["connectedSites"])
+    ? (stored["connectedSites"] as unknown[])
+    : [];
+
+  // Avoid duplicates.
+  const filtered = existing.filter(
+    (s) =>
+      s !== null &&
+      typeof s === "object" &&
+      (s as Record<string, unknown>)["origin"] !== origin,
+  );
+
+  const now = new Date().toISOString();
+  filtered.push({
+    id: origin,
+    origin,
+    connectedAt: now,
+    lastUsedAt: now,
+  });
+
+  await chrome.storage.local.set({ connectedSites: filtered });
+}
+
+async function handleDappRequest(
+  message: { method: string; params: unknown[]; origin: string },
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
+  const { method, origin } = message;
+
+  try {
+    const bootstrap = await walletService.bootstrap();
+    const address = bootstrap.selectedAccount?.address ?? null;
+    const chainId = bootstrap.walletState.selectedChainId;
+
+    switch (method) {
+      case "eth_accounts": {
+        const connected = await getDappConnectionForOrigin(origin);
+        sendResponse({ ok: true, result: connected && address ? [address] : [] });
+        return;
+      }
+
+      case "eth_chainId": {
+        sendResponse({ ok: true, result: `0x${chainId.toString(16)}` });
+        return;
+      }
+
+      case "net_version": {
+        sendResponse({ ok: true, result: String(chainId) });
+        return;
+      }
+
+      case "eth_requestAccounts": {
+        // Already connected — return accounts immediately.
+        const alreadyConnected = await getDappConnectionForOrigin(origin);
+        if (alreadyConnected && address) {
+          sendResponse({ ok: true, result: [address] });
+          return;
+        }
+
+        // Wallet locked — cannot show account in approval UI.
+        if (!address) {
+          sendResponse({
+            ok: false,
+            error: {
+              code: 4900,
+              message: "Wallet is locked. Please unlock SIMPL Wallet first.",
+            },
+          });
+          return;
+        }
+
+        // New origin — open approval popup.
+        const approvalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+        pendingDappApprovals.set(approvalId, {
+          id: approvalId,
+          origin,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+
+        await openDappApprovalWindow(approvalId);
+        return;
+      }
+
+      default: {
+        sendResponse({
+          ok: false,
+          error: { code: 4200, message: `Method not supported: ${method}` },
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    sendResponse({
+      ok: false,
+      error: { code: -32603, message: getErrorMessage(err) },
+    });
+  }
+}
+
+// Route dApp RPC requests from content scripts.
+chrome.runtime.onMessage.addListener(
+  (message: any, sender, sendResponse: (response: unknown) => void) => {
+    if (message?.type !== "SIMPL_DAPP_REQUEST") return false;
+
+    void handleDappRequest(
+      {
+        method: message.method as string,
+        params: Array.isArray(message.params) ? (message.params as unknown[]) : [],
+        origin: (message.origin as string | undefined) ?? (sender.origin ?? sender.url ?? ""),
+      },
+      sendResponse,
+    );
+
+    return true; // keep channel open for async response
+  },
+);
+
+// Approval popup queries pending approval details.
+chrome.runtime.onMessage.addListener(
+  (message: any, _sender, sendResponse: (response: unknown) => void) => {
+    if (message?.type !== "SIMPL_DAPP_GET_PENDING") return false;
+
+    const id = message.id as string;
+    const pending = pendingDappApprovals.get(id);
+
+    if (!pending) {
+      sendResponse({ ok: false, error: "Approval request not found or already handled." });
+      return true;
+    }
+
+    void walletService
+      .bootstrap()
+      .then((bootstrap) => {
+        sendResponse({
+          ok: true,
+          pending: {
+            origin: pending.origin,
+            address: bootstrap.selectedAccount?.address ?? null,
+            chainId: bootstrap.walletState.selectedChainId,
+          },
+        });
+      })
+      .catch((err) => {
+        sendResponse({ ok: false, error: getErrorMessage(err) });
+      });
+
+    return true;
+  },
+);
+
+// Approval popup — user clicked "Connect".
+chrome.runtime.onMessage.addListener(
+  (message: any, _sender, sendResponse: (response: unknown) => void) => {
+    if (message?.type !== "SIMPL_DAPP_APPROVE") return false;
+
+    const id = message.id as string;
+    const pending = pendingDappApprovals.get(id);
+
+    if (!pending) {
+      sendResponse({ ok: false, error: "Approval not found." });
+      return true;
+    }
+
+    pendingDappApprovals.delete(id);
+
+    void walletService
+      .bootstrap()
+      .then(async (bootstrap) => {
+        const address = bootstrap.selectedAccount?.address;
+        if (!address) {
+          pending.reject({ code: 4900, message: "Wallet is locked." });
+          sendResponse({ ok: false, error: "Wallet is locked." });
+          return;
+        }
+
+        await saveDappConnection(pending.origin);
+        pending.resolve([address]);
+        sendResponse({ ok: true });
+
+        // Close the approval window.
+        if (dappApprovalWindowId !== null) {
+          try { await chrome.windows.remove(dappApprovalWindowId); } catch { /* already closed */ }
+          dappApprovalWindowId = null;
+        }
+      })
+      .catch((err) => {
+        pending.reject({ code: -32603, message: getErrorMessage(err) });
+        sendResponse({ ok: false, error: getErrorMessage(err) });
+      });
+
+    return true;
+  },
+);
+
+// Approval popup — user clicked "Reject".
+chrome.runtime.onMessage.addListener(
+  (message: any, _sender, sendResponse: (response: unknown) => void) => {
+    if (message?.type !== "SIMPL_DAPP_REJECT") return false;
+
+    const id = message.id as string;
+    const pending = pendingDappApprovals.get(id);
+
+    if (pending) {
+      pendingDappApprovals.delete(id);
+      pending.reject({ code: 4001, message: "User rejected the request." });
+    }
+
+    sendResponse({ ok: true });
+
+    // Close the approval window.
+    if (dappApprovalWindowId !== null) {
+      void chrome.windows.remove(dappApprovalWindowId).catch(() => {/* already closed */});
+      dappApprovalWindowId = null;
+    }
+
+    return true;
+  },
+);
