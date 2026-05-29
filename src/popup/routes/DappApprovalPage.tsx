@@ -12,13 +12,21 @@ type TypedDataDisplay = {
   messageJson?: string;
 };
 
+type SwitchChainData = {
+  requestedChainId: number;
+  requestedChainName: string;
+  currentChainId: number;
+  currentChainName: string;
+};
+
 type PendingData = {
   origin: string;
   address: string | null;
   chainId: number;
-  kind: "connect" | "personal_sign" | "typed_data";
+  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain";
   displayMessage?: string;
   typedDataDisplay?: TypedDataDisplay;
+  switchChain?: SwitchChainData;
 };
 
 type PageState =
@@ -671,6 +679,106 @@ export default function DappApprovalPage() {
           onReject={reject}
           working={working}
           primaryDisabled={!password.trim()}
+        />
+      </Shell>
+    );
+  }
+
+  // ── switch_chain ──
+
+  if (kind === "switch_chain") {
+    const sc = data.switchChain;
+    return (
+      <Shell>
+        <ApprovalHeader title="Switch network" onClose={reject} disabled={working} />
+        <ScrollSection>
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{
+              width: 46, height: 46, borderRadius: 15,
+              background: C.cardBg, border: `1px solid ${C.cardBorder}`,
+              display: "grid", placeItems: "center", fontSize: 22,
+            }}>
+              🔗
+            </div>
+            <div style={{ display: "grid", gap: 7 }}>
+              <h1 style={{
+                margin: 0, fontSize: 24, lineHeight: "27px",
+                letterSpacing: "-0.055em", fontWeight: 880,
+              }}>
+                Switch network
+              </h1>
+              <p style={{ margin: 0, color: C.fgMuted, fontSize: 13, lineHeight: "19px" }}>
+                <strong>{domain}</strong> is requesting a network switch.
+              </p>
+            </div>
+          </div>
+
+          <ApprovalCard>
+            {sc ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "8px 10px",
+                  border: `1px solid ${C.previewBorder}`,
+                  borderRadius: 13,
+                  background: C.previewBg,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, color: C.fgMuted, marginBottom: 1 }}>Current network</div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{sc.currentChainName}</div>
+                  </div>
+                </div>
+
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 18, color: C.fgMuted,
+                }}>
+                  ↓
+                </div>
+
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "8px 10px",
+                  border: `1px solid ${C.previewBorder}`,
+                  borderRadius: 13,
+                  background: C.previewBg,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, color: C.fgMuted, marginBottom: 1 }}>Requested network</div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{sc.requestedChainName}</div>
+                  </div>
+                  <div style={{
+                    fontSize: 11, fontWeight: 800,
+                    color: "#1d7a3f", background: "#e8f8ef",
+                    padding: "2px 8px", borderRadius: 8, flexShrink: 0,
+                  }}>
+                    New
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{
+              borderRadius: 12,
+              background: C.warnBg,
+              border: `1px solid ${C.warnBorder}`,
+              color: C.warnText,
+              padding: "10px 12px",
+              fontSize: 12, lineHeight: "17px", fontWeight: 750,
+            }}>
+              This site is requesting to switch your active network. All future requests will use the new network until you switch back.
+            </div>
+          </ApprovalCard>
+
+          <OriginNotice domain={domain} method="wallet_switchEthereumChain" />
+
+          {errorMsg && <ErrorLine message={errorMsg} />}
+        </ScrollSection>
+        <ApprovalFooter
+          primaryLabel="Switch"
+          onPrimary={approve}
+          onReject={reject}
+          working={working}
         />
       </Shell>
     );

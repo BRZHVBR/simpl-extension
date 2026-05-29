@@ -1,6 +1,7 @@
 /// <reference types="chrome" />
 
 import { walletService } from "../core/wallet/wallet.service";
+import { getChainById } from "../core/networks/chain-registry";
 
 
 
@@ -388,8 +389,9 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 type DappPendingApproval = {
   id: string;
   origin: string;
-  kind: "connect" | "personal_sign" | "typed_data";
+  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain";
   signingParams?: { method: string; params: unknown[] };
+  switchChainId?: number;
   resolve: (result: unknown) => void;
   reject: (error: { code: number; message: string }) => void;
 };
@@ -538,6 +540,15 @@ function extractTypedDataDisplay(params: unknown[]): TypedDataDisplay {
   }
 }
 
+async function broadcastProviderEvent(event: string, data: unknown): Promise<void> {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.id !== undefined) {
+      chrome.tabs.sendMessage(tab.id, { type: "SIMPL_PROVIDER_EVENT", event, data }).catch(() => {});
+    }
+  }
+}
+
 async function handleDappRequest(
   message: { method: string; params: unknown[]; origin: string },
   sendResponse: (response: unknown) => void,
@@ -647,6 +658,54 @@ async function handleDappRequest(
         return;
       }
 
+      case "wallet_switchEthereumChain": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+
+        // Parse chainId from params[0].chainId (hex string or number).
+        const rawParam = (message.params[0] as Record<string, unknown> | undefined)?.chainId;
+        if (rawParam === undefined || rawParam === null) {
+          sendResponse({ ok: false, error: { code: -32602, message: "Missing chainId parameter." } });
+          return;
+        }
+        const requestedChainId =
+          typeof rawParam === "number"
+            ? rawParam
+            : Number.parseInt(String(rawParam), 16);
+        if (!Number.isFinite(requestedChainId) || requestedChainId <= 0) {
+          sendResponse({ ok: false, error: { code: -32602, message: "Invalid chainId." } });
+          return;
+        }
+
+        // Check supported.
+        const requestedChain = getChainById(requestedChainId);
+        if (!requestedChain) {
+          sendResponse({ ok: false, error: { code: 4902, message: "Unrecognized chain." } });
+          return;
+        }
+
+        // Already active — return null immediately per EIP-3326.
+        if (requestedChainId === chainId) {
+          sendResponse({ ok: true, result: null });
+          return;
+        }
+
+        const switchApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(switchApprovalId, {
+          id: switchApprovalId,
+          origin,
+          kind: "switch_chain",
+          switchChainId: requestedChainId,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(switchApprovalId);
+        return;
+      }
+
       default: {
         sendResponse({
           ok: false,
@@ -710,6 +769,16 @@ chrome.runtime.onMessage.addListener(
             ...(pending.kind === "typed_data"
               ? { typedDataDisplay: extractTypedDataDisplay(pending.signingParams?.params ?? []) }
               : {}),
+            ...(pending.kind === "switch_chain" && pending.switchChainId !== undefined
+              ? {
+                  switchChain: {
+                    requestedChainId: pending.switchChainId,
+                    requestedChainName: getChainById(pending.switchChainId)?.name ?? `Chain ${pending.switchChainId}`,
+                    currentChainId: bootstrap.walletState.selectedChainId,
+                    currentChainName: getChainById(bootstrap.walletState.selectedChainId)?.name ?? `Chain ${bootstrap.walletState.selectedChainId}`,
+                  },
+                }
+              : {}),
           },
         });
       })
@@ -765,6 +834,11 @@ chrome.runtime.onMessage.addListener(
           });
           pendingDappApprovals.delete(id);
           pending.resolve(result.signature);
+        } else if (pending.kind === "switch_chain" && pending.switchChainId !== undefined) {
+          await walletService.setSelectedChainId(pending.switchChainId);
+          pendingDappApprovals.delete(id);
+          pending.resolve(null);
+          await broadcastProviderEvent("chainChanged", `0x${pending.switchChainId.toString(16)}`);
         }
         sendResponse({ ok: true });
 
@@ -775,8 +849,9 @@ chrome.runtime.onMessage.addListener(
         }
       })
       .catch((err) => {
-        // For signing kinds, keep the pending alive so the user can retry with the correct password.
-        if (pending.kind === "connect") {
+        // Signing kinds keep pending alive so the user can retry with the correct password.
+        // Non-signing kinds (connect, switch_chain) have no retry — reject and clean up.
+        if (pending.kind === "connect" || pending.kind === "switch_chain") {
           pendingDappApprovals.delete(id);
           pending.reject({ code: -32603, message: getErrorMessage(err) });
         }
