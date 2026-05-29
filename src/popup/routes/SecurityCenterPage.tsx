@@ -9,6 +9,7 @@ import {
 
 import SeedBackupVerificationPage from "./SeedBackupVerificationPage";
 import ConnectedSitesPage from "./ConnectedSitesPage";
+
 type SecurityStatus = "secure" | "warning" | "danger" | "unknown";
 
 type Snapshot = Record<string, unknown>;
@@ -24,12 +25,9 @@ type SecurityCheck = {
   subtitle: string;
   status: SecurityStatus;
   value: string;
-  points: number;
-  maxPoints: number;
   onClick?: () => void | Promise<void>;
 };
 
-const KEYCHAIN_HOST = "com.local_evm_wallet.keychain";
 const AUTO_LOCK_OPTIONS = [1, 5, 15, 30, 60] as const;
 
 function getChrome() {
@@ -121,18 +119,6 @@ function firstNumber(source: Snapshot, paths: string[]): number | undefined {
       if (Number.isFinite(parsed)) {
         return parsed;
       }
-    }
-  }
-
-  return undefined;
-}
-
-function firstString(source: Snapshot, paths: string[]): string | undefined {
-  for (const path of paths) {
-    const value = getByPath(source, path);
-
-    if (typeof value === "string" && value.trim() !== "") {
-      return value;
     }
   }
 
@@ -343,64 +329,6 @@ async function updateRootSettings(
   });
 }
 
-function pingKeychainHost(): Promise<boolean> {
-  const chrome = getChrome();
-
-  if (!chrome?.runtime?.sendNativeMessage) {
-    return Promise.resolve(false);
-  }
-
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendNativeMessage(
-        KEYCHAIN_HOST,
-        {
-          type: "ping",
-          source: "security-center",
-          createdAt: new Date().toISOString(),
-        },
-        () => {
-          resolve(!chrome.runtime?.lastError);
-        },
-      );
-    } catch {
-      resolve(false);
-    }
-  });
-}
-
-function getScoreLabel(score: number): string {
-  if (score >= 80) {
-    return "Strong";
-  }
-
-  if (score >= 60) {
-    return "Good";
-  }
-
-  if (score >= 30) {
-    return "Needs attention";
-  }
-
-  return "At risk";
-}
-
-function getScoreDescription(score: number): string {
-  if (score >= 80) {
-    return "Your wallet has strong local protection.";
-  }
-
-  if (score >= 60) {
-    return "A few security checks still need attention.";
-  }
-
-  if (score >= 30) {
-    return "Some important protection steps are missing.";
-  }
-
-  return "Review security before storing meaningful funds.";
-}
-
 function getStatusColor(status: SecurityStatus): string {
   switch (status) {
     case "secure":
@@ -466,26 +394,11 @@ const styles: Record<string, CSSProperties> = {
     width: "100%",
     maxWidth: 680,
     margin: "0 auto",
-    padding: "52px 12px 88px",
+    padding: "20px 12px 88px",
     boxSizing: "border-box",
   },
-  title: {
-    margin: 0,
-    maxWidth: 520,
-    fontSize: 46,
-    lineHeight: "50px",
-    letterSpacing: "-0.055em",
-    fontWeight: 900,
-  },
-  subtitle: {
-    margin: "14px 0 0",
-    maxWidth: 560,
-    color: "var(--text-secondary, #777777)",
-    fontSize: 14,
-    lineHeight: "21px",
-  },
   section: {
-    marginTop: 34,
+    marginTop: 28,
   },
   sectionLabel: {
     margin: "0 0 12px",
@@ -494,9 +407,6 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: "16px",
     letterSpacing: "0.2em",
     textTransform: "uppercase",
-  },
-  scoreCard: {
-    marginTop: 26,
   },
   note: {
     marginTop: 14,
@@ -512,7 +422,6 @@ const styles: Record<string, CSSProperties> = {
 function BackIcon() {
   return <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>;
 }
-
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return <div style={styles.sectionLabel}>{children}</div>;
@@ -577,8 +486,6 @@ export default function SecurityCenterPage({
 }: SecurityCenterPageProps) {
   const pageRef = useRef<HTMLElement | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>({});
-  const [isLoading, setIsLoading] = useState(true);
-  const [isCheckingKeychain, setIsCheckingKeychain] = useState(false);
   const [showSeedBackupVerification, setShowSeedBackupVerification] = useState(false);
   const [isAutoLockSheetOpen, setIsAutoLockSheetOpen] = useState(false);
   const [showConnectedSites, setShowConnectedSites] = useState(false);
@@ -597,7 +504,6 @@ export default function SecurityCenterPage({
       }
 
       setSnapshot(mergeSnapshots(nextSnapshot, initialSnapshot));
-      setIsLoading(false);
     });
 
     return () => {
@@ -627,18 +533,6 @@ export default function SecurityCenterPage({
       "__localStorage.walletSettings.autoLockMinutes",
     ]);
 
-    const touchIdEnabled = firstBoolean(snapshot, [
-      "biometricUnlock.enabled",
-      "settings.biometricUnlock.enabled",
-      "walletState.settings.biometricUnlock.enabled",
-      "settings.touchIdEnabled",
-      "walletState.settings.touchIdEnabled",
-      "securitySettings.touchIdEnabled",
-      "touchIdEnabled",
-      "__localStorage.biometricUnlock.enabled",
-      "__localStorage.settings.biometricUnlock.enabled",
-    ]);
-
     const seedBackupConfirmed = firstBoolean(snapshot, [
       "securitySettings.seedBackupConfirmed",
       "settings.security.seedBackupConfirmed",
@@ -657,14 +551,6 @@ export default function SecurityCenterPage({
       "__localStorage.settings.security.seedBackupVerified",
     ]);
 
-    const keychainStatus = firstString(snapshot, [
-      "securitySettings.lastKeychainHostCheckStatus",
-      "settings.security.lastKeychainHostCheckStatus",
-      "walletState.settings.security.lastKeychainHostCheckStatus",
-      "lastKeychainHostCheckStatus",
-      "__localStorage.securitySettings.lastKeychainHostCheckStatus",
-    ]);
-
     const hideBalances = firstBoolean(snapshot, [
       "settings.hideBalances",
       "walletState.settings.hideBalances",
@@ -674,20 +560,20 @@ export default function SecurityCenterPage({
       "__localStorage.walletSettings.hideBalances",
     ]);
 
+    const rawConnectedSites = snapshot["connectedSites"];
+    const connectedSitesCount = Array.isArray(rawConnectedSites)
+      ? (rawConnectedSites as unknown[]).length
+      : 0;
+
     return {
       encryptedVaultExists,
       autoLockMinutes,
-      touchIdEnabled,
       seedBackupConfirmed,
       seedBackupVerified,
-      keychainStatus,
       hideBalances,
+      connectedSitesCount,
     };
   }, [snapshot]);
-
-  const confirmSeedBackup = () => {
-    setShowSeedBackupVerification(true);
-  };
 
   const handleSeedBackupVerified = async () => {
     const nextSnapshot = await updateSecuritySettings({
@@ -699,20 +585,6 @@ export default function SecurityCenterPage({
 
     setSnapshot(mergeSnapshots(nextSnapshot, initialSnapshot));
     setShowSeedBackupVerification(false);
-  };
-
-  const checkKeychainHost = async () => {
-    setIsCheckingKeychain(true);
-
-    const ok = await pingKeychainHost();
-
-    const nextSnapshot = await updateSecuritySettings({
-      lastKeychainHostCheckAt: new Date().toISOString(),
-      lastKeychainHostCheckStatus: ok ? "ok" : "failed",
-    });
-
-    setSnapshot(mergeSnapshots(nextSnapshot, initialSnapshot));
-    setIsCheckingKeychain(false);
   };
 
   const changeAutoLock = () => {
@@ -777,8 +649,6 @@ export default function SecurityCenterPage({
           : "Encrypted vault was not detected in local wallet storage.",
         status: securityState.encryptedVaultExists ? "secure" : "danger",
         value: securityState.encryptedVaultExists ? "Secure" : "Risk",
-        points: securityState.encryptedVaultExists ? 25 : 0,
-        maxPoints: 25,
       },
       {
         id: "auto-lock",
@@ -792,33 +662,7 @@ export default function SecurityCenterPage({
           typeof securityState.autoLockMinutes === "number"
             ? `${securityState.autoLockMinutes} min`
             : "Unknown",
-        points: autoLockIsStrong ? 20 : 0,
-        maxPoints: 20,
         onClick: changeAutoLock,
-      },
-      {
-        id: "touch-id",
-        title: "Touch ID",
-        subtitle:
-          securityState.touchIdEnabled === true
-            ? "Biometric unlock is enabled on this device."
-            : securityState.touchIdEnabled === false
-              ? "Biometric unlock is disabled."
-              : "Touch ID status is not available.",
-        status:
-          securityState.touchIdEnabled === true
-            ? "secure"
-            : securityState.touchIdEnabled === false
-              ? "warning"
-              : "unknown",
-        value:
-          securityState.touchIdEnabled === true
-            ? "Enabled"
-            : securityState.touchIdEnabled === false
-              ? "Disabled"
-              : "Unknown",
-        points: securityState.touchIdEnabled === true ? 20 : 0,
-        maxPoints: 20,
       },
       {
         id: "recovery-backup",
@@ -831,34 +675,7 @@ export default function SecurityCenterPage({
               : "Select random recovery words to verify backup.",
         status: securityState.seedBackupVerified === true ? "secure" : "warning",
         value: securityState.seedBackupVerified === true ? "Verified" : "Review",
-        points: securityState.seedBackupVerified === true ? 20 : 0,
-        maxPoints: 20,
         onClick: () => setShowSeedBackupVerification(true),
-      },
-      {
-        id: "keychain-host",
-        title: "macOS Keychain Host",
-        subtitle:
-          securityState.keychainStatus === "ok"
-            ? "Native Touch ID integration responded successfully."
-            : securityState.keychainStatus === "failed"
-              ? "Native Touch ID integration check failed."
-              : "Run a local check for native Touch ID integration.",
-        status:
-          securityState.keychainStatus === "ok"
-            ? "secure"
-            : securityState.keychainStatus === "failed"
-              ? "warning"
-              : "unknown",
-        value:
-          securityState.keychainStatus === "ok"
-            ? "Connected"
-            : securityState.keychainStatus === "failed"
-              ? "Failed"
-              : "Check",
-        points: securityState.keychainStatus === "ok" ? 10 : 0,
-        maxPoints: 10,
-        onClick: isCheckingKeychain ? undefined : checkKeychainHost,
       },
     ];
 
@@ -871,28 +688,16 @@ export default function SecurityCenterPage({
           : "Balance privacy mode is disabled.",
         status: securityState.hideBalances ? "secure" : "warning",
         value: securityState.hideBalances ? "On" : "Off",
-        points: securityState.hideBalances ? 5 : 0,
-        maxPoints: 5,
         onClick: toggleHideBalances,
       });
     }
 
     return list;
-  }, [securityState, isCheckingKeychain, initialSnapshot]);
-
-  const score = checks.reduce((sum, check) => sum + check.points, 0);
-  const maxScore = checks.reduce((sum, check) => sum + check.maxPoints, 0);
-  const normalizedScore = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+  }, [securityState, initialSnapshot]);
 
   const checksById = new Map(checks.map((check) => [check.id, check]));
 
-  const deviceCheckIds = [
-    "encrypted-vault",
-    "auto-lock",
-    "touch-id",
-    "keychain-host",
-  ] as const;
-
+  const deviceCheckIds = ["encrypted-vault", "auto-lock"] as const;
   const recoveryCheckIds = ["recovery-backup"] as const;
   const privacyCheckIds = ["hide-balances"] as const;
 
@@ -934,25 +739,7 @@ export default function SecurityCenterPage({
       </header>
 
       <section style={styles.content}>
-        <h1 style={styles.title}>Security Center</h1>
-
-        <p style={styles.subtitle}>
-          Review wallet protection, recovery readiness and local device checks.
-        </p>
-
-        <section style={styles.scoreCard}>
-          <div className="row-list">
-            <Row
-              instrument="security"
-              title={isLoading ? "Checking" : getScoreLabel(normalizedScore)}
-              subtitle={isLoading ? "Reading local wallet settings." : getScoreDescription(normalizedScore)}
-              value={isLoading ? "…" : `${normalizedScore}/100`}
-              valueColor={getStatusColor(normalizedScore >= 80 ? "secure" : normalizedScore >= 60 ? "warning" : "danger")}
-            />
-          </div>
-        </section>
-
-        <section style={styles.section}>
+        <section style={{ ...styles.section, marginTop: 0 }}>
           <SectionLabel>Device security</SectionLabel>
 
           <div className="row-list">
@@ -994,25 +781,50 @@ export default function SecurityCenterPage({
             <Row
               instrument="dapps"
               title="Connected sites"
-              subtitle="Review websites that can request wallet access."
-              value="0"
-              valueColor="var(--text-secondary, #777777)"
+              subtitle={
+                securityState.connectedSitesCount > 0
+                  ? `${securityState.connectedSitesCount} site${securityState.connectedSitesCount !== 1 ? "s" : ""} connected. Review regularly.`
+                  : "No dApps connected yet."
+              }
+              value={securityState.connectedSitesCount > 0 ? String(securityState.connectedSitesCount) : "None"}
+              valueColor={
+                securityState.connectedSitesCount > 0
+                  ? "var(--text-secondary, #777777)"
+                  : getStatusColor("secure")
+              }
               onClick={() => setShowConnectedSites(true)}
             />
 
-            <Row
-              instrument="security"
-              title="Token approvals"
-              subtitle="Review contract spending permissions."
-              value="Soon"
-              valueColor="var(--text-secondary, #777777)"
-            />
+
           </div>
 
-          <p style={styles.note}>
-            Security Center never sends your seed phrase, private key, password or vault key to external services.
-            It only reads local wallet settings and device capability status.
-          </p>
+        </section>
+
+        <section style={styles.section}>
+          <SectionLabel>Security tips</SectionLabel>
+
+          <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+            {(
+              [
+                "Verify your seed phrase backup by selecting random words to confirm you wrote them down correctly.",
+                "Review connected sites regularly and disconnect any you no longer use.",
+              ] as const
+            ).map((tip, i) => (
+              <div
+                key={i}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  background: "var(--bg-sunken, #f7f7f4)",
+                  fontSize: 12,
+                  lineHeight: "18px",
+                  color: "var(--text-secondary, #666666)",
+                }}
+              >
+                {tip}
+              </div>
+            ))}
+          </div>
         </section>
       </section>
 
@@ -1143,6 +955,8 @@ export default function SecurityCenterPage({
           </section>
         </div>
       ) : null}
+
+
     </main>
   );
 }

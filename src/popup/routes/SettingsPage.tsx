@@ -261,23 +261,6 @@ export function SettingsPage({
     await handleChanged();
   }
 
-  async function checkNativeHost() {
-    setNativeStatus("Checking macOS Keychain Host...");
-
-    const response = await nativeMessagingClient.getAvailability();
-
-    if (!response.ok) {
-      setNativeStatus(`Native host error: ${response.error}`);
-      return;
-    }
-
-    setNativeStatus(
-      `Native host available: ${response.data.available}. Platform: ${
-        response.data.platform
-      }. Biometry: ${response.data.biometryType ?? "unknown"}.`,
-    );
-  }
-
   async function enableTouchIdUnlock() {
     setNativeStatus(null);
 
@@ -604,13 +587,6 @@ export function SettingsPage({
               value={biometricEnabled ? "Enabled" : "Disabled"}
             />
 
-            <Row
-              icon={<ShieldIcon />}
-              instrument="security"
-              title="Check macOS Keychain Host"
-              subtitle="Verify native Touch ID integration."
-              onClick={() => void checkNativeHost()}
-            />
           </div>
 
           {!biometricEnabled ? (
