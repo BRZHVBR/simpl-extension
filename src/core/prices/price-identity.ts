@@ -232,6 +232,47 @@ export function canResolveChart(
   return getCoinGeckoPlatform(chainId) !== null;
 }
 
+// Fully resolved price identity for an asset, gathering everything the spot,
+// market-data and history services need in one place so they can never drift
+// apart. `address` is normalized to lowercase (or null for native).
+export type ResolvedPriceIdentity = {
+  key: string;
+  chainId: number;
+  address: string | null;
+  // CoinGecko coin id (native / pegged / wrapped) when known, else null.
+  coinGeckoId: string | null;
+  // CoinGecko asset platform for contract-address lookups, else null.
+  platform: string | null;
+  canHaveChart: boolean;
+  isStable: boolean;
+  // Whether we expect to resolve a spot price at all (vs. "No price").
+  hasMarketData: boolean;
+};
+
+// The single resolver shared by token-price, market-data and price-history.
+export function resolvePriceIdentity(
+  chainId: number,
+  address: string | null,
+): ResolvedPriceIdentity {
+  const addr = address ? address.toLowerCase() : null;
+  const known = getKnownPriceAsset(chainId, addr);
+  const coinGeckoId = resolveCoinGeckoId(chainId, addr);
+  const platform = getCoinGeckoPlatform(chainId);
+
+  return {
+    key: getPriceIdentityKey(chainId, addr),
+    chainId,
+    address: addr,
+    coinGeckoId,
+    platform,
+    canHaveChart: canResolveChart(chainId, addr),
+    isStable: known?.isStable ?? false,
+    // A spot price is resolvable when we have a coin id (native/known) or a
+    // contract address on a chain with a CoinGecko platform.
+    hasMarketData: coinGeckoId !== null || (addr !== null && platform !== null),
+  };
+}
+
 // Development-only diagnostics for price lookups. No-ops in production.
 export function priceDebug(
   scope: string,

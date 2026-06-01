@@ -23,6 +23,10 @@ import {
   canResolveChart,
   isKnownPriceAsset,
 } from "../../core/prices/price-identity";
+import {
+  marketDataService,
+  type AssetMarketData,
+} from "../../core/prices/market-data.service";
 import { PriceSparkline } from "../components/PriceSparkline";
 import { walletService } from "../../core/wallet/wallet.service";
 import { customTokenService } from "../../core/tokens/custom-token.service";
@@ -305,6 +309,25 @@ function getAssetUsdValue(
   return null;
 }
 
+// Compact USD for large market figures: $1.2B / $842.5M / $12.4K / $123.
+// Returns "—" for missing / non-positive values (we never show "No volume").
+function formatCompactUsd(value?: number | null): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "—";
+
+  const tiers: [number, string][] = [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "K"],
+  ];
+  for (const [base, suffix] of tiers) {
+    if (value >= base) {
+      const scaled = value / base;
+      return `$${scaled.toFixed(1).replace(/\.0$/, "")}${suffix}`;
+    }
+  }
+  return `$${Math.round(value)}`;
+}
+
 function getAssetUsdPrice(
   asset: WalletAssetBalance,
   nativeAsset: WalletAssetBalance | null,
@@ -473,6 +496,9 @@ export function HomePage(props: HomePageProps) {
   const [chartStatus, setChartStatus] = useState<
     "idle" | "loading" | "ready" | "empty"
   >("idle");
+  // Market data (24h change + 24h volume) for the open asset. Independent of
+  // the chart so volume can show even when history is unavailable.
+  const [marketData, setMarketData] = useState<AssetMarketData | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmHide, setConfirmHide] = useState(false);
   const [isAssetsManagerOpen, setIsAssetsManagerOpen] = useState(false);
@@ -859,6 +885,32 @@ export function HomePage(props: HomePageProps) {
     };
   }, [assetDetails?.id, chartRange]);
 
+  // Load 24h volume / change for the open asset. Uses the shared price identity
+  // (same provider id as spot + chart). Cached data shows instantly while a
+  // fresh value loads; "—" only when no data exists. Never blocks the screen.
+  useEffect(() => {
+    if (!assetDetails) return;
+
+    let active = true;
+    const isNative = isNativeAsset(assetDetails);
+    const address = isNative ? null : assetDetails.contractAddress ?? null;
+    const marketInput = { chainId: assetDetails.chainId, address };
+
+    // Instant paint from cache (may be stale), then refresh.
+    const cached = marketDataService.getCachedAssetMarketData(marketInput);
+    if (cached) setMarketData(cached);
+
+    void marketDataService.getAssetMarketData(marketInput).then((data) => {
+      if (!active) return;
+      // Keep cached values rather than wiping to null on a transient failure.
+      if (data) setMarketData(data);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [assetDetails?.id]);
+
   function handleOpenAssetDetails(asset: WalletAssetBalance) {
     setAssetDetails(asset);
     setConfirmRemove(false);
@@ -866,6 +918,7 @@ export function HomePage(props: HomePageProps) {
     setChartRange("7D");
     setChartPoints(null);
     setChartStatus("idle");
+    setMarketData(null);
   }
 
   function handleCloseAssetDetails() {
@@ -1035,6 +1088,11 @@ export function HomePage(props: HomePageProps) {
     const chartPositive = (chartChangePct ?? 0) >= 0;
     const showChartCard = chartStatus === "loading" || chartStatus === "ready";
 
+    // 24h volume (market-wide, from the provider) + 24h change.
+    const volume24hUsd = marketData?.volume24hUsd ?? null;
+    const volume24hText = formatCompactUsd(volume24hUsd);
+    const change24hPct = marketData?.priceChange24hPct ?? null;
+
     // Price stat: show "Loading…" only while a lookup we expect to succeed is
     // still pending. Unknown tokens fall straight through to "No price".
     const detailsAddress = isNative ? null : asset.contractAddress ?? null;
@@ -1050,6 +1108,14 @@ export function HomePage(props: HomePageProps) {
     const detailsPriceDone = isNative ? nativePriceDone : tokenPricesDone;
     const detailsPriceLoading =
       detailsPrice === null && detailsPriceExpected && !detailsPriceDone;
+
+    // When there's no chart (stablecoin or history unavailable) but the asset
+    // still has a market identity, show a compact market card with the 24h
+    // volume instead of an empty chart. Unknown tokens show neither.
+    const showMarketFallback =
+      !showChartCard &&
+      chartStatus !== "idle" &&
+      (detailsPriceExpected || detailsPrice != null || volume24hUsd != null);
 
     return (
       <div className="ext-popup asset-details-page" data-screen-label="Asset">
@@ -1191,35 +1257,33 @@ export function HomePage(props: HomePageProps) {
               </div>
             </section>
 
-            {/* Price chart — only when history is available */}
+            {/* Price chart — when history is available. Header carries the
+                selected-range change (left) and 24h volume (right). */}
             {showChartCard ? (
               <section className="asset-chart-card">
                 <div className="asset-chart-head">
-                  <span className="asset-chart-title">Price</span>
-                  {chartStatus === "ready" && chartChangePct !== null ? (
-                    <span
-                      className={`asset-chart-change asset-chart-change--${
-                        chartPositive ? "up" : "down"
-                      }`}
-                    >
-                      {chartPositive ? "+" : ""}
-                      {chartChangePct.toFixed(2)}%
-                    </span>
-                  ) : null}
-                  <span className="asset-chart-ranges">
-                    {(["1D", "7D", "1M"] as PriceHistoryRange[]).map((range) => (
-                      <button
-                        key={range}
-                        type="button"
-                        className={`asset-chart-range${
-                          chartRange === range ? " asset-chart-range--active" : ""
+                  <div className="asset-chart-head__col">
+                    <span className="asset-chart-title">Price</span>
+                    {chartStatus === "ready" && chartChangePct !== null ? (
+                      <span
+                        className={`asset-chart-change asset-chart-change--${
+                          chartPositive ? "up" : "down"
                         }`}
-                        onClick={() => setChartRange(range)}
                       >
-                        {range}
-                      </button>
-                    ))}
-                  </span>
+                        {chartPositive ? "+" : ""}
+                        {chartChangePct.toFixed(2)}%
+                      </span>
+                    ) : (
+                      <span className="asset-chart-change asset-chart-change--muted">
+                        {chartRange} change
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="asset-chart-head__col asset-chart-head__col--right">
+                    <span className="asset-chart-vol-label">Market volume 24h</span>
+                    <span className="asset-chart-vol-value">{volume24hText}</span>
+                  </div>
                 </div>
 
                 <div className="asset-chart-body">
@@ -1229,6 +1293,44 @@ export function HomePage(props: HomePageProps) {
                     <div className="asset-chart-loading">Loading chart…</div>
                   )}
                 </div>
+
+                <div className="asset-chart-ranges">
+                  {(["1D", "7D", "1M"] as PriceHistoryRange[]).map((range) => (
+                    <button
+                      key={range}
+                      type="button"
+                      className={`asset-chart-range${
+                        chartRange === range ? " asset-chart-range--active" : ""
+                      }`}
+                      onClick={() => setChartRange(range)}
+                    >
+                      {range}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : showMarketFallback ? (
+              // No chart (stablecoin / history unavailable) but the asset has a
+              // market identity — show a compact market card, not an empty chart.
+              <section className="asset-market-card">
+                <div className="asset-market-card__row">
+                  <span className="asset-market-card__label">Market volume 24h</span>
+                  <span className="asset-market-card__value">{volume24hText}</span>
+                </div>
+                {change24hPct !== null ? (
+                  <div className="asset-market-card__row">
+                    <span className="asset-market-card__label">24h change</span>
+                    <span
+                      className={`asset-chart-change asset-chart-change--${
+                        change24hPct >= 0 ? "up" : "down"
+                      }`}
+                    >
+                      {change24hPct >= 0 ? "+" : ""}
+                      {change24hPct.toFixed(2)}%
+                    </span>
+                  </div>
+                ) : null}
+                <div className="asset-market-card__note">Chart unavailable</div>
               </section>
             ) : null}
 

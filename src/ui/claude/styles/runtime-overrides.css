@@ -3620,8 +3620,21 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
 
 .asset-chart-head {
   display: flex !important;
-  align-items: center !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
   gap: 8px !important;
+}
+
+.asset-chart-head__col {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  min-width: 0 !important;
+}
+
+.asset-chart-head__col--right {
+  align-items: flex-end !important;
+  text-align: right !important;
 }
 
 .asset-chart-title {
@@ -3643,10 +3656,66 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
   color: #a83939 !important;
 }
 
+.asset-chart-change--muted {
+  color: var(--ink-3) !important;
+  font-weight: 600 !important;
+}
+
+/* 24h volume block (chart card header, right column) */
+.asset-chart-vol-label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--ink-3) !important;
+}
+
+.asset-chart-vol-value {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: var(--ink-1) !important;
+}
+
 .asset-chart-ranges {
-  margin-left: auto !important;
-  display: inline-flex !important;
+  display: flex !important;
+  justify-content: center !important;
   gap: 4px !important;
+  margin-top: 8px !important;
+}
+
+/* Compact market card — shown when there's no chart but the asset has a
+   market identity (stablecoins, or history temporarily unavailable). */
+.asset-market-card {
+  border: 1px solid var(--line) !important;
+  border-radius: 18px !important;
+  background: var(--bg-surface, #ffffff) !important;
+  padding: 12px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+}
+
+.asset-market-card__row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.asset-market-card__label {
+  font-size: 12px !important;
+  color: var(--ink-3) !important;
+}
+
+.asset-market-card__value {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: var(--ink-1) !important;
+}
+
+.asset-market-card__note {
+  font-size: 11px !important;
+  color: var(--ink-3) !important;
+  text-align: center !important;
+  margin-top: 2px !important;
 }
 
 .asset-chart-range {
