@@ -1,0 +1,248 @@
+// src/core/prices/price-identity.ts
+//
+// Single source of truth for resolving a *stable price identity* for any
+// wallet asset, used by every price/history service so spot prices, portfolio
+// value and charts all agree. Identity is NEVER symbol-based — symbols collide
+// across chains (ETH/USDT/USDC exist on many networks). It is:
+//
+//   native  → `${chainId}:native`
+//   ERC-20  → `${chainId}:${lowercaseContractAddress}`
+//
+// Known assets map to a CoinGecko coin id (for native + pegged/wrapped tokens
+// where a contract lookup would miss or be ambiguous) and declare whether a
+// price chart is worth showing (`canHaveChart`). Stablecoins resolve a spot
+// price but skip the chart — a flat $1 line is noise.
+
+import {
+  BASE_CHAIN_ID,
+  BNB_SMART_CHAIN_ID,
+  ETHEREUM_MAINNET_CHAIN_ID,
+  SEPOLIA_CHAIN_ID,
+} from "../networks/chain-registry";
+
+// Marker used in place of a contract address for a chain's native asset.
+export const NATIVE_ADDRESS = "native";
+
+export type KnownPriceAsset = {
+  symbol: string;
+  // CoinGecko coin id used for native assets and as the spot fallback / chart
+  // source for pegged & wrapped tokens.
+  coinGeckoId: string;
+  // Whether a price chart is meaningful for this asset.
+  canHaveChart: boolean;
+  // Stablecoins: spot resolves to ~$1 and the chart is intentionally hidden.
+  isStable?: boolean;
+};
+
+const isDev = Boolean(import.meta.env?.DEV);
+
+// Normalize an asset to its stable price identity key.
+export function getPriceIdentityKey(
+  chainId: number,
+  address: string | null,
+): string {
+  const addr = address ? address.toLowerCase() : NATIVE_ADDRESS;
+  return `${chainId}:${addr}`;
+}
+
+// CoinGecko "asset platform" slug for contract-address lookups. Testnets have
+// no market data.
+export function getCoinGeckoPlatform(chainId: number): string | null {
+  if (chainId === ETHEREUM_MAINNET_CHAIN_ID) return "ethereum";
+  if (chainId === BNB_SMART_CHAIN_ID) return "binance-smart-chain";
+  if (chainId === BASE_CHAIN_ID) return "base";
+  return null;
+}
+
+// CoinGecko coin id for a chain's native asset. Sepolia is mapped to ethereum
+// to stay consistent with the native spot price service.
+export function getNativeCoinId(chainId: number): string | null {
+  if (
+    chainId === ETHEREUM_MAINNET_CHAIN_ID ||
+    chainId === BASE_CHAIN_ID ||
+    chainId === SEPOLIA_CHAIN_ID
+  ) {
+    return "ethereum";
+  }
+  if (chainId === BNB_SMART_CHAIN_ID) return "binancecoin";
+  return null;
+}
+
+// Known assets keyed by stable price identity. Addresses are lowercase; native
+// assets use the NATIVE_ADDRESS marker. Token contract addresses mirror the
+// app token registry (src/core/tokens/token-registry.ts).
+export const KNOWN_PRICE_ASSETS: Record<string, KnownPriceAsset> = {
+  // ---- Native assets ----
+  "1:native": { symbol: "ETH", coinGeckoId: "ethereum", canHaveChart: true },
+  "56:native": { symbol: "BNB", coinGeckoId: "binancecoin", canHaveChart: true },
+  "8453:native": { symbol: "ETH", coinGeckoId: "ethereum", canHaveChart: true },
+  "11155111:native": {
+    symbol: "ETH",
+    coinGeckoId: "ethereum",
+    canHaveChart: true,
+  },
+
+  // ---- Ethereum Mainnet (ERC-20) ----
+  "1:0xdac17f958d2ee523a2206206994597c13d831ec7": {
+    symbol: "USDT",
+    coinGeckoId: "tether",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "1:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": {
+    symbol: "USDC",
+    coinGeckoId: "usd-coin",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "1:0x6b175474e89094c44da98b954eedeac495271d0f": {
+    symbol: "DAI",
+    coinGeckoId: "dai",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "1:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {
+    symbol: "WETH",
+    coinGeckoId: "weth",
+    canHaveChart: true,
+  },
+  "1:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": {
+    symbol: "WBTC",
+    coinGeckoId: "wrapped-bitcoin",
+    canHaveChart: true,
+  },
+  "1:0x514910771af9ca656af840dff83e8264ecf986ca": {
+    symbol: "LINK",
+    coinGeckoId: "chainlink",
+    canHaveChart: true,
+  },
+  "1:0x1f9840a85d5af5bf1d1762f925bdaddc4201f984": {
+    symbol: "UNI",
+    coinGeckoId: "uniswap",
+    canHaveChart: true,
+  },
+  "1:0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9": {
+    symbol: "AAVE",
+    coinGeckoId: "aave",
+    canHaveChart: true,
+  },
+
+  // ---- BNB Smart Chain (BEP-20) ----
+  "56:0x55d398326f99059ff775485246999027b3197955": {
+    symbol: "USDT",
+    coinGeckoId: "tether",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": {
+    symbol: "USDC",
+    coinGeckoId: "usd-coin",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "56:0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3": {
+    symbol: "DAI",
+    coinGeckoId: "dai",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": {
+    symbol: "WBNB",
+    coinGeckoId: "binancecoin",
+    canHaveChart: true,
+  },
+  "56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82": {
+    symbol: "CAKE",
+    coinGeckoId: "pancakeswap-token",
+    canHaveChart: true,
+  },
+  "56:0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c": {
+    symbol: "BTCB",
+    coinGeckoId: "bitcoin",
+    canHaveChart: true,
+  },
+  "56:0x2170ed0880ac9a755fd29b2688956bd959f933f8": {
+    symbol: "ETH",
+    coinGeckoId: "ethereum", // Binance-Peg Ethereum
+    canHaveChart: true,
+  },
+
+  // ---- Base ----
+  "8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {
+    symbol: "USDC",
+    coinGeckoId: "usd-coin",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "8453:0x4d13a9b2a5ada3b52f36e4ccdb91023f3d05ec6e": {
+    symbol: "USDT",
+    coinGeckoId: "tether",
+    canHaveChart: false,
+    isStable: true,
+  },
+  "8453:0x4200000000000000000000000000000000000006": {
+    symbol: "WETH",
+    coinGeckoId: "weth",
+    canHaveChart: true,
+  },
+};
+
+// Look up a known asset by stable identity, or null for unknown tokens.
+export function getKnownPriceAsset(
+  chainId: number,
+  address: string | null,
+): KnownPriceAsset | null {
+  return KNOWN_PRICE_ASSETS[getPriceIdentityKey(chainId, address)] ?? null;
+}
+
+// Whether we have any expectation of resolving a spot price for this asset.
+// Used to decide between a "Loading…" state and a definitive "No price".
+// Unknown tokens still *try* via the contract endpoint, but we don't promise
+// a price (so they fall straight through to "No price" rather than spinning).
+export function isKnownPriceAsset(
+  chainId: number,
+  address: string | null,
+): boolean {
+  if (!address) return getNativeCoinId(chainId) !== null;
+  return getKnownPriceAsset(chainId, address) !== null;
+}
+
+// CoinGecko coin id for an asset, when one is known. Native + pegged/wrapped
+// tokens resolve here; plain ERC-20s return null (priced by contract address).
+export function resolveCoinGeckoId(
+  chainId: number,
+  address: string | null,
+): string | null {
+  if (!address) return getNativeCoinId(chainId);
+  return getKnownPriceAsset(chainId, address)?.coinGeckoId ?? null;
+}
+
+// Whether a price chart should be attempted for this asset.
+//   native            → yes when a coin id exists
+//   known chartable   → yes
+//   known stable      → no (flat $1 line is noise)
+//   unknown ERC-20    → attempt only when the chain has a CoinGecko platform
+export function canResolveChart(
+  chainId: number,
+  address: string | null,
+): boolean {
+  if (!address) return getNativeCoinId(chainId) !== null;
+  const known = getKnownPriceAsset(chainId, address);
+  if (known) return known.canHaveChart;
+  return getCoinGeckoPlatform(chainId) !== null;
+}
+
+// Development-only diagnostics for price lookups. No-ops in production.
+export function priceDebug(
+  scope: string,
+  detail: Record<string, unknown>,
+): void {
+  if (isDev) console.debug(`[price] ${scope}`, detail);
+}
+
+export function priceWarn(
+  scope: string,
+  detail: Record<string, unknown>,
+): void {
+  if (isDev) console.warn(`[price] ${scope}`, detail);
+}

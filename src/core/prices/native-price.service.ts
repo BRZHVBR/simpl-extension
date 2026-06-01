@@ -1,9 +1,4 @@
-import {
-  BASE_CHAIN_ID,
-  BNB_SMART_CHAIN_ID,
-  ETHEREUM_MAINNET_CHAIN_ID,
-  SEPOLIA_CHAIN_ID,
-} from "../networks/chain-registry";
+import { getNativeCoinId, priceDebug, priceWarn } from "./price-identity";
 
 export type NativeAssetQuote = {
   chainId: number;
@@ -17,22 +12,6 @@ const CACHE_TTL_MS = 60_000;
 
 function getNativePriceCacheKey(chainId: number): string {
   return `simple:nativePrice:${chainId}`;
-}
-
-function getCoinGeckoIdByChainId(chainId: number): string | null {
-  if (
-    chainId === ETHEREUM_MAINNET_CHAIN_ID ||
-    chainId === BASE_CHAIN_ID ||
-    chainId === SEPOLIA_CHAIN_ID
-  ) {
-    return "ethereum";
-  }
-
-  if (chainId === BNB_SMART_CHAIN_ID) {
-    return "binancecoin";
-  }
-
-  return null;
 }
 
 function readCachedQuote(chainId: number): NativeAssetQuote | null {
@@ -92,9 +71,13 @@ export class NativePriceService {
     chainId: number;
     symbol: string;
   }): Promise<NativeAssetQuote | null> {
-    const coinId = getCoinGeckoIdByChainId(input.chainId);
+    const coinId = getNativeCoinId(input.chainId);
 
     if (!coinId) {
+      priceWarn("native not found", {
+        chainId: input.chainId,
+        symbol: input.symbol,
+      });
       return null;
     }
 
@@ -118,6 +101,11 @@ export class NativePriceService {
       });
 
       if (!response.ok) {
+        priceWarn("native fetch failed", {
+          chainId: input.chainId,
+          coinId,
+          status: response.status,
+        });
         return cached;
       }
 
@@ -145,9 +133,19 @@ export class NativePriceService {
       };
 
       writeCachedQuote(quote);
+      priceDebug("native ok", {
+        chainId: input.chainId,
+        coinId,
+        priceUsd,
+      });
 
       return quote;
-    } catch {
+    } catch (error) {
+      priceWarn("native error", {
+        chainId: input.chainId,
+        coinId,
+        error: String(error),
+      });
       return cached;
     }
   }

@@ -16,6 +16,7 @@ export type CustomToken = {
   name: string;
   decimals: number;
   createdAt: string;
+  logoURI?: string;
 };
 
 export type CustomTokenPreview = CustomToken & {

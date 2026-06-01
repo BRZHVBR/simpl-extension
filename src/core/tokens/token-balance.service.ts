@@ -2,6 +2,7 @@ import { Contract, JsonRpcProvider, formatUnits } from "ethers";
 import type { EvmAddress } from "../accounts/derivation";
 import { balanceService } from "../balances/balance.service";
 import { networkService } from "../networks/network.service";
+import { setCachedTokenLogo } from "../../utils/token-logo-resolver";
 import { assetDiscoveryService } from "./asset-discovery.service";
 import { customTokenService, type CustomToken } from "./custom-token.service";
 import {
@@ -53,6 +54,7 @@ type BalanceToken = {
   decimals: number;
   alwaysShow?: boolean;
   source: "registry" | "custom";
+  logoURI?: string | null;
 };
 
 function isPositiveRawBalance(rawBalance: string): boolean {
@@ -102,6 +104,7 @@ function mapCustomToken(token: CustomToken): BalanceToken {
     decimals: token.decimals,
     alwaysShow: true,
     source: "custom",
+    logoURI: token.logoURI ?? null,
   };
 }
 
@@ -176,6 +179,13 @@ export class TokenBalanceService {
         address,
         chainId,
       });
+
+      // Persist any logo URLs returned by discovery so they survive into custom-token renders
+      for (const asset of discoveredAssets) {
+        if (asset.contractAddress && asset.logoUrl) {
+          setCachedTokenLogo(asset.chainId, asset.contractAddress, asset.logoUrl);
+        }
+      }
 
       return discoveredAssets
         .filter((asset) => asset.type === "erc20")
@@ -271,7 +281,7 @@ export class TokenBalanceService {
       visible: token.alwaysShow === true || isPositiveRawBalance(rawBalanceString),
       usdPrice: null,
       usdValue: null,
-      logoUrl: null,
+      logoUrl: token.logoURI ?? null,
       isSpam: false,
       isVerified: token.source === "registry",
       source: token.source,
