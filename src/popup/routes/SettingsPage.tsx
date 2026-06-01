@@ -14,7 +14,8 @@ import {
   getBiometricWalletId,
 } from "../../core/security/biometric-unlock.helpers";
 import { openFullscreenApp, openSidePanel } from "../surface-actions";
-import { NetworkIcon } from "../components/NetworkIcon";
+import { getNetworkDisplayName } from "../../core/networks/chain-registry";
+import { SelectNetworkPage } from "../components/SelectNetworkPage";
 
 import SecurityCenterPage from "./SecurityCenterPage";
 
@@ -370,6 +371,18 @@ export function SettingsPage({
     await handleChanged();
   }
 
+  // Network selection — the shared full-screen selector (no modal/sheet).
+  if (networkSelectorOpen) {
+    return (
+      <SelectNetworkPage
+        purpose="active"
+        selectedChainId={walletState.selectedChainId}
+        onSelect={(chainId) => void selectChain(chainId)}
+        onBack={() => setNetworkSelectorOpen(false)}
+      />
+    );
+  }
+
   return showSecurityCenter ? (
     <SecurityCenterPage
     onBack={() => {
@@ -537,7 +550,7 @@ export function SettingsPage({
             <Row
               icon={<CrosshairIcon />}
               instrument="networks"
-              title={activeChain.name}
+              title={getNetworkDisplayName(walletState.selectedChainId)}
               subtitle={activeChain.subtitle}
               value="Change"
               onClick={() => setNetworkSelectorOpen(true)}
@@ -674,78 +687,6 @@ export function SettingsPage({
         </section>
       </div>
 
-      {networkSelectorOpen ? (
-        <div className="network-sheet-backdrop">
-          <button
-            type="button"
-            className="network-sheet-scrim"
-            aria-label="Close network selector"
-            onClick={() => setNetworkSelectorOpen(false)}
-          />
-
-          <section className="network-sheet">
-            <div className="network-sheet-head">
-              <div>
-                <div className="network-sheet-title">Select network</div>
-                <div className="network-sheet-subtitle">
-                  Choose active EVM network.
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="icbtn"
-                onClick={() => setNetworkSelectorOpen(false)}
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="row-list">
-              {CHAIN_OPTIONS.map((chain) => {
-                const active = chain.chainId === walletState.selectedChainId;
-
-                return (
-<button
-                    key={chain.chainId}
-                    type="button"
-                    className="row"
-                    onClick={() => void selectChain(chain.chainId)}
-                    style={{
-                      width: "100%",
-                      border: 0,
-                      background: active ? "var(--bg-sunken)" : "transparent",
-                      textAlign: "left",
-                    }}
-                  >
-                    <NetworkIcon chainId={chain.chainId} networkName={chain.name} size={36} />
-
-                    <div className="body">
-                      <div className="nm">{chain.name}</div>
-                      <div className="sub">{chain.subtitle}</div>
-                    </div>
-
-                    <div className="num">
-                      <div
-                        className="v"
-                        style={
-                          active
-                            ? {
-                                color: "var(--secure)",
-                              }
-                            : undefined
-                        }
-                      >
-                        {active ? "Active" : "›"}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      ) : null}
     </div>
   
     </>

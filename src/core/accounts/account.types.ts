@@ -2,7 +2,16 @@ import type { EvmAddress, EvmDerivationPath } from "./derivation";
 
 export type WalletAccountId = string;
 
-export type WalletAccountType = "mnemonic" | "watch";
+// Account "source" discriminator:
+// - "mnemonic"         → derived from the primary wallet seed at a BIP-44 index
+// - "importedMnemonic" → first account of a separately imported recovery phrase
+// - "privateKey"       → a single account imported from a raw EVM private key
+// - "watch"            → address only, cannot sign
+export type WalletAccountType =
+  | "mnemonic"
+  | "importedMnemonic"
+  | "privateKey"
+  | "watch";
 
 export type MnemonicWalletAccount = {
   id: WalletAccountId;
@@ -11,6 +20,30 @@ export type MnemonicWalletAccount = {
   address: EvmAddress;
   label: string;
   derivationPath: EvmDerivationPath;
+  createdAt: string;
+};
+
+// Imported recovery phrase — its first account. The phrase itself lives only in
+// the encrypted vault (never on the account record); signing re-derives by id.
+export type ImportedMnemonicWalletAccount = {
+  id: WalletAccountId;
+  type: "importedMnemonic";
+  index: number;
+  address: EvmAddress;
+  label: string;
+  derivationPath: EvmDerivationPath;
+  createdAt: string;
+};
+
+// Imported raw private key — one account. The key lives only in the encrypted
+// vault (never on the account record); signing looks it up by id.
+export type ImportedPrivateKeyWalletAccount = {
+  id: WalletAccountId;
+  type: "privateKey";
+  index: null;
+  address: EvmAddress;
+  label: string;
+  derivationPath: null;
   createdAt: string;
 };
 
@@ -24,7 +57,11 @@ export type WatchWalletAccount = {
   createdAt: string;
 };
 
-export type WalletAccount = MnemonicWalletAccount | WatchWalletAccount;
+export type WalletAccount =
+  | MnemonicWalletAccount
+  | ImportedMnemonicWalletAccount
+  | ImportedPrivateKeyWalletAccount
+  | WatchWalletAccount;
 
 export type WalletAccountsState = {
   selectedAccountId: WalletAccountId | null;
@@ -46,3 +83,19 @@ export type RenameWalletAccountInput = {
   accountId: WalletAccountId;
   label: string;
 };
+
+export function isWatchOnly(account: WalletAccount | null | undefined): boolean {
+  return account?.type === "watch";
+}
+
+// Any non-watch account can sign (primary, imported mnemonic, or private key).
+export function canSign(account: WalletAccount | null | undefined): boolean {
+  return account != null && account.type !== "watch";
+}
+
+// Whether the account came from an external import (vs the primary wallet seed).
+export function isImportedAccount(
+  account: WalletAccount | null | undefined,
+): boolean {
+  return account?.type === "importedMnemonic" || account?.type === "privateKey";
+}

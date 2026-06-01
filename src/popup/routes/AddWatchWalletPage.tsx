@@ -17,8 +17,8 @@ function EyeIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="16"
-      height="16"
+      width="20"
+      height="20"
       aria-hidden="true"
       fill="none"
       stroke="currentColor"
@@ -32,26 +32,6 @@ function EyeIcon() {
   );
 }
 
-function AlertIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 9v4" />
-      <path d="M12 17h.01" />
-      <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
-    </svg>
-  );
-}
-
 function CheckIcon() {
   return (
     <svg
@@ -61,7 +41,7 @@ function CheckIcon() {
       aria-hidden="true"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="2.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -70,101 +50,8 @@ function CheckIcon() {
   );
 }
 
-function shortAddress(address: string): string {
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
-}
-
-function Notice({
-  tone,
-  title,
-  children,
-}: {
-  tone: "warning" | "danger" | "success";
-  title: string;
-  children: string;
-}) {
-  const styles =
-    tone === "success"
-      ? {
-          background: "var(--secure-soft)",
-          color: "var(--secure)",
-        }
-      : tone === "danger"
-        ? {
-            background: "var(--danger-soft)",
-            color: "var(--danger)",
-          }
-        : {
-            background: "var(--warn-soft)",
-            color: "var(--warn)",
-          };
-
-  return (
-    <section
-      style={{
-        ...styles,
-        borderRadius: 16,
-        padding: 12,
-        display: "grid",
-        gridTemplateColumns: "32px 1fr",
-        gap: 10,
-        alignItems: "flex-start",
-      }}
-    >
-      <div
-        className="tok"
-        style={{
-          width: 32,
-          height: 32,
-          minWidth: 32,
-          maxWidth: 32,
-          background: "rgba(255,255,255,0.55)",
-          color: "currentColor",
-        }}
-      >
-        {tone === "success" ? <CheckIcon /> : <AlertIcon />}
-      </div>
-
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 750,
-            color: "currentColor",
-          }}
-        >
-          {title}
-        </div>
-
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: 12,
-            lineHeight: 1.45,
-            color: "currentColor",
-            opacity: 0.82,
-          }}
-        >
-          {children}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function SectionLabel({ children }: { children: string }) {
-  return (
-    <span
-      className="lbl"
-      style={{
-        fontSize: 11,
-        letterSpacing: "0.12em",
-        textTransform: "uppercase",
-      }}
-    >
-      {children}
-    </span>
-  );
+  return <span className="lbl awatch-label">{children}</span>;
 }
 
 export function AddWatchWalletPage({
@@ -180,6 +67,15 @@ export function AddWatchWalletPage({
   const addressIsValid = isAddress(trimmedAddress);
   const checksumAddress = addressIsValid ? getAddress(trimmedAddress) : null;
   const labelValue = label.trim();
+
+  // Inline address error: shown once something invalid is typed, or when the
+  // service rejected the address. Service-level errors (non-address) render
+  // separately just above the button.
+  const showAddressError =
+    error === "Enter a valid EVM address." ||
+    (trimmedAddress.length > 0 && !addressIsValid);
+  const serviceError =
+    error && error !== "Enter a valid EVM address." ? error : null;
 
   async function addWatchWallet() {
     setError(null);
@@ -206,105 +102,81 @@ export function AddWatchWalletPage({
   }
 
   return (
-    <div className="ext-popup" data-screen-label="04 Add Watch Wallet">
+    <div
+      className="ext-popup add-watch-page"
+      data-screen-label="04 Add Watch Wallet"
+    >
       <div className="bar-top">
         <button className="icbtn" type="button" onClick={onBack}>
           <BackIcon />
         </button>
 
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 650,
-            color: "var(--ink-1)",
-          }}
-        >
-          Watch wallet
-        </div>
+        <div className="awatch-header-title">Watch wallet</div>
 
         <span style={{ flex: 1 }} />
 
-        <span className="pill">View-only</span>
+        <span className="awatch-viewonly-pill">View-only</span>
       </div>
 
-      <div
-        className="screen-body"
-        style={{
-          display: "grid",
-          gap: 16,
-        }}
-      >
-        <section style={{ paddingTop: 6 }}>
-          <div
-            className="tok"
-            style={{
-              width: 46,
-              height: 46,
-              minWidth: 46,
-              maxWidth: 46,
-              marginBottom: 14,
-              background: "var(--ink-1)",
-              color: "var(--ink-on-dark)",
-            }}
-          >
+      <div className="screen-body" style={{ display: "grid", gap: 16 }}>
+        {/* Hero: soft circular icon + compact title + one-line subtitle */}
+        <section className="awatch-hero">
+          <span className="awatch-hero__icon">
             <EyeIcon />
-          </div>
+          </span>
 
-          <div className="t-h2">
-            Add watch
-            <br />
-            wallet
+          <div className="awatch-hero__text">
+            <div className="awatch-hero__title">Add watch wallet</div>
+            <div className="awatch-hero__sub">
+              Track any EVM address without private keys.
+            </div>
           </div>
-
-          <p
-            style={{
-              margin: "10px 0 0",
-              color: "var(--ink-3)",
-              fontSize: 13,
-              lineHeight: 1.45,
-            }}
-          >
-            Track balances for any EVM address without importing private keys.
-            Watch-only wallets cannot sign transactions.
-          </p>
         </section>
 
-        {error ? (
-          <Notice title="Watch wallet error" tone="danger">
-            {error}
-          </Notice>
-        ) : null}
-
         <form
-          style={{ display: "grid", gap: 12 }}
+          style={{ display: "grid", gap: 14 }}
           onSubmit={(event) => {
             event.preventDefault();
             void addWatchWallet();
           }}
         >
-          <label style={{ display: "grid", gap: 8 }}>
+          <label className="awatch-field">
             <SectionLabel>Wallet address</SectionLabel>
 
-            <input
-              className="input lg"
-              value={address}
-              placeholder="0x..."
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => {
-                setAddress(event.target.value);
-                setError(null);
-              }}
-            />
+            <div className="awatch-input-wrap">
+              <input
+                className={`input lg${showAddressError ? " input--error" : ""}`}
+                value={address}
+                placeholder="0x..."
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => {
+                  setAddress(event.target.value);
+                  setError(null);
+                }}
+              />
+
+              {addressIsValid ? (
+                <span className="awatch-check" aria-label="Valid address">
+                  <CheckIcon />
+                </span>
+              ) : null}
+            </div>
+
+            {showAddressError ? (
+              <div className="send-field-error awatch-field-error">
+                Enter a valid EVM address.
+              </div>
+            ) : null}
           </label>
 
-          <label style={{ display: "grid", gap: 8 }}>
+          <label className="awatch-field">
             <SectionLabel>Label optional</SectionLabel>
 
             <input
               className="input lg"
               value={label}
-              placeholder="Whale wallet, Treasury, Friend..."
+              placeholder="Name this wallet"
               autoComplete="off"
               spellCheck={false}
               onChange={(event) => {
@@ -314,41 +186,25 @@ export function AddWatchWalletPage({
             />
           </label>
 
-          {checksumAddress ? (
-            <section style={{ display: "grid", gap: 8 }}>
-              <SectionLabel>Preview</SectionLabel>
+          {/* Compact view-only notice */}
+          <section className="awatch-notice">
+            <span className="awatch-notice__icon">
+              <EyeIcon />
+            </span>
 
-              <div className="row-list">
-                <div className="row" style={{ cursor: "default" }}>
-                  <div className="tok">
-                    <EyeIcon />
-                  </div>
-
-                  <div className="body">
-                    <div className="nm">{labelValue || "Watch wallet"}</div>
-                    <div className="sub">{shortAddress(checksumAddress)}</div>
-                  </div>
-
-                  <div className="num">
-                    <div
-                      className="pill"
-                      style={{
-                        background: "var(--secure-soft)",
-                        color: "var(--secure)",
-                      }}
-                    >
-                      Ready
-                    </div>
-                  </div>
-                </div>
+            <div className="awatch-notice__body">
+              <div className="awatch-notice__title">View-only wallet</div>
+              <div className="awatch-notice__text">
+                You can monitor assets, but cannot send or sign.
               </div>
-            </section>
-          ) : null}
+            </div>
+          </section>
 
-          <Notice title="No private key needed" tone="warning">
-            This wallet is view-only. You can monitor assets, but you cannot send
-            funds from this address.
-          </Notice>
+          {serviceError ? (
+            <div className="send-field-error awatch-field-error">
+              {serviceError}
+            </div>
+          ) : null}
 
           <button
             className="btn primary lg full"

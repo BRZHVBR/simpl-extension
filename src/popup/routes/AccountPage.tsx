@@ -5,11 +5,8 @@ import {
   SimpleInstrumentIcon,
   type SimpleInstrument,
 } from "../components/SimpleInstrumentIcon";
-import { PixelAvatar } from "../components/PixelAvatar";
-import type {
-  WalletAccount,
-  WalletAccountId,
-} from "../../core/accounts/account.types";
+import { AccountBlockie } from "../components/AccountBlockie";
+import type { WalletAccount } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
 import { walletService } from "../../core/wallet/wallet.service";
 import "./AccountPage.css";
@@ -19,10 +16,57 @@ type AccountPageProps = {
   onBack: () => void;
   onChanged: () => void | Promise<void>;
   onAddWatchWallet: () => void;
+  onImportWallet: () => void;
+  onOpenAccountDetails: (account: WalletAccount) => void;
 };
 
 function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+// Small badge shown next to a non-primary account's name. Primary-seed
+// accounts have no badge.
+function getAccountBadge(
+  account: WalletAccount,
+): { label: string; kind: "watch" | "imported" } | null {
+  if (account.type === "watch") {
+    return { label: "Watch-only", kind: "watch" };
+  }
+  if (account.type === "importedMnemonic" || account.type === "privateKey") {
+    return { label: "Imported", kind: "imported" };
+  }
+  return null;
+}
+
+// Short source word used in the account-row subtitle (before the address).
+function getAccountSourceShort(account: WalletAccount): string {
+  switch (account.type) {
+    case "mnemonic":
+      return "Primary wallet";
+    case "importedMnemonic":
+    case "privateKey":
+      return "Imported";
+    case "watch":
+      return "Watch-only";
+  }
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
 }
 
 function ChevronIcon() {
@@ -43,63 +87,61 @@ function ChevronIcon() {
   );
 }
 
+// Whole row is one button that opens AccountDetailsPage. Switching the active
+// account happens there (via "Use account"), not by tapping the list — this
+// removes the old split-click confusion.
 function AccountRow({
   account,
   selected,
-  pending,
   disabled,
-  onClick,
+  onOpenDetails,
 }: {
   account: WalletAccount;
   selected: boolean;
-  pending: boolean;
   disabled: boolean;
-  onClick: () => void;
+  onOpenDetails: () => void;
 }) {
+  const badge = getAccountBadge(account);
+
   return (
-    <div className={`acct-row-card${selected ? " acct-row-card--active" : ""}`}>
-      <button
-        className="row"
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        style={{
-          width: "100%",
-          border: 0,
-          textAlign: "left",
-          opacity: disabled && !pending ? 0.6 : 1,
-        }}
-      >
-        <PixelAvatar
-          seed={account.address}
-          size={38}
-          label={account.label}
-          variant={account.type === "watch" ? "watch" : selected ? "selected" : "signer"}
-        />
+    <button
+      className={`acct-row-card acct-row-button${
+        selected ? " acct-row-card--active" : ""
+      }`}
+      type="button"
+      onClick={onOpenDetails}
+      disabled={disabled}
+      aria-label={`Open account details for ${account.label}`}
+    >
+      <AccountBlockie address={account.address} size={38} />
 
-        <div className="body">
-          <div className="nm acct-row-name">
-            <span className="acct-row-name-text">{account.label}</span>
-            {account.type === "watch" ? (
-              <span className="acct-watch-pill">Watch</span>
-            ) : null}
-          </div>
-          <div className="sub">{shortAddress(account.address)}</div>
-        </div>
-
-        <div className="num">
-          {pending ? (
-            <span className="acct-pending">···</span>
-          ) : selected ? (
-            <span className="acct-active-badge">Active</span>
-          ) : (
-            <span className="acct-chevron">
-              <ChevronIcon />
+      <div className="body">
+        <div className="nm acct-row-name">
+          <span className="acct-row-name-text">{account.label}</span>
+          {badge ? (
+            <span
+              className={
+                badge.kind === "watch"
+                  ? "acct-watch-pill"
+                  : "acct-imported-pill"
+              }
+            >
+              {badge.label}
             </span>
-          )}
+          ) : null}
         </div>
-      </button>
-    </div>
+        <div className="sub acct-row-sub">
+          {getAccountSourceShort(account)} · {shortAddress(account.address)}
+        </div>
+      </div>
+
+      <div className="acct-row-aside">
+        {selected ? <span className="acct-active-badge">Active</span> : null}
+        <span className="acct-row-chevron" aria-hidden="true">
+          <ChevronIcon />
+        </span>
+      </div>
+    </button>
   );
 }
 
@@ -147,46 +189,77 @@ function ActionCard({
   );
 }
 
+// The three add/import actions — shared between the bottom-of-list section and
+// the full-screen "+" options view so the wording stays in sync.
+function AddActions({
+  addingAccount,
+  busy,
+  onAddAccount,
+  onImportWallet,
+  onAddWatchWallet,
+}: {
+  addingAccount: boolean;
+  busy: boolean;
+  onAddAccount: () => void;
+  onImportWallet: () => void;
+  onAddWatchWallet: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <ActionCard
+        instrument="multiWallet"
+        title={addingAccount ? "Adding account…" : "Add account"}
+        subtitle="Create the next account from this wallet."
+        disabled={busy}
+        onClick={onAddAccount}
+      />
+
+      <ActionCard
+        instrument="security"
+        title="Import wallet"
+        subtitle="Use a seed phrase or private key."
+        disabled={busy}
+        onClick={onImportWallet}
+      />
+
+      <ActionCard
+        instrument="addressBook"
+        title="Add watch wallet"
+        subtitle="Track any address without private keys."
+        disabled={busy}
+        onClick={onAddWatchWallet}
+      />
+    </div>
+  );
+}
+
 export function AccountPage({
   walletState,
   onBack,
   onChanged,
   onAddWatchWallet,
+  onImportWallet,
+  onOpenAccountDetails,
 }: AccountPageProps) {
-  const [pendingAccountId, setPendingAccountId] =
-    useState<WalletAccountId | null>(null);
   const [addingAccount, setAddingAccount] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Full-screen add/import options, opened from the header "+".
+  const [showAddOptions, setShowAddOptions] = useState(false);
 
+  // Signer accounts = anything that can sign (primary, imported phrase, or
+  // imported private key). Watch-only accounts are grouped separately.
   const signerAccounts = walletState.accounts.filter(
-    (account) => account.type === "mnemonic",
+    (account) => account.type !== "watch",
   );
 
   const watchAccounts = walletState.accounts.filter(
     (account) => account.type === "watch",
   );
 
-  const busy = pendingAccountId !== null || addingAccount;
+  const busy = addingAccount;
 
   async function handleChanged() {
     await onChanged();
-  }
-
-  async function selectAccount(accountId: WalletAccountId) {
-    if (accountId === walletState.selectedAccountId) return;
-
-    try {
-      setError(null);
-      setPendingAccountId(accountId);
-
-      await walletService.selectAccount({ accountId });
-
-      await handleChanged();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingAccountId(null);
-    }
   }
 
   async function addAccount() {
@@ -202,6 +275,40 @@ export function AccountPage({
     } finally {
       setAddingAccount(false);
     }
+  }
+
+  // ── Add account options (full screen, opened from header "+") ──
+  if (showAddOptions) {
+    return (
+      <div className="ext-popup acct-page" data-screen-label="Add account">
+        <div className="bar-top">
+          <button
+            className="icbtn"
+            type="button"
+            onClick={() => setShowAddOptions(false)}
+            aria-label="Back"
+          >
+            <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>
+          </button>
+          <span className="acct-title">Add account</span>
+          <span style={{ width: 32, flexShrink: 0 }} />
+        </div>
+
+        <div className="screen-body">
+          {error ? <div className="acct-error">{error}</div> : null}
+
+          <AddActions
+            addingAccount={addingAccount}
+            busy={busy}
+            onAddAccount={() => {
+              void addAccount().then(() => setShowAddOptions(false));
+            }}
+            onImportWallet={onImportWallet}
+            onAddWatchWallet={onAddWatchWallet}
+          />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -226,8 +333,17 @@ export function AccountPage({
 
         <span className="acct-title">Accounts</span>
 
-        {/* Spacer to balance back button and keep title centered */}
-        <span style={{ width: 32, flexShrink: 0 }} />
+        <button
+          className="icbtn"
+          type="button"
+          onClick={() => {
+            setError(null);
+            setShowAddOptions(true);
+          }}
+          aria-label="Add account"
+        >
+          <PlusIcon />
+        </button>
       </div>
 
       {/* ── Scrollable body ── */}
@@ -246,9 +362,8 @@ export function AccountPage({
                 key={account.id}
                 account={account}
                 selected={account.id === walletState.selectedAccountId}
-                pending={pendingAccountId === account.id}
                 disabled={busy}
-                onClick={() => void selectAccount(account.id)}
+                onOpenDetails={() => onOpenAccountDetails(account)}
               />
             ))}
 
@@ -269,36 +384,25 @@ export function AccountPage({
                   key={account.id}
                   account={account}
                   selected={account.id === walletState.selectedAccountId}
-                  pending={pendingAccountId === account.id}
                   disabled={busy}
-                  onClick={() => void selectAccount(account.id)}
+                  onOpenDetails={() => onOpenAccountDetails(account)}
                 />
               ))}
             </div>
           </section>
         ) : null}
 
-        {/* ── Add accounts ── */}
+        {/* ── Add / import ── */}
         <section className="acct-section">
           <div className="acct-section-label">Add accounts</div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <ActionCard
-              instrument="multiWallet"
-              title={addingAccount ? "Adding account…" : "Add account"}
-              subtitle="Create the next account from your seed phrase."
-              disabled={busy}
-              onClick={() => void addAccount()}
-            />
-
-            <ActionCard
-              instrument="wallet"
-              title="Add watch wallet"
-              subtitle="Track any address without importing private keys."
-              disabled={busy}
-              onClick={onAddWatchWallet}
-            />
-          </div>
+          <AddActions
+            addingAccount={addingAccount}
+            busy={busy}
+            onAddAccount={() => void addAccount()}
+            onImportWallet={onImportWallet}
+            onAddWatchWallet={onAddWatchWallet}
+          />
         </section>
       </div>
     </div>

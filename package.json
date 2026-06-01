@@ -26,6 +26,7 @@
     "@tailwindcss/vite": "^4.3.0",
     "@walletconnect/core": "^2.23.9",
     "@walletconnect/utils": "^2.23.9",
+    "ethereum-blockies-base64": "^1.0.2",
     "ethers": "^6.16.0",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",

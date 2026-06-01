@@ -5,20 +5,23 @@ import {
   JsonRpcProvider,
   Wallet,
   formatUnits,
+  getAddress,
   type TypedDataDomain,
   type TypedDataField,
-  HDNodeWallet,
   getBytes,
   isHexString,
 } from "ethers";
 import { accountService } from "../accounts/account.service";
 import type {
+  MnemonicWalletAccount,
   WalletAccount,
   WalletAccountId,
 } from "../accounts/account.types";
 import {
+  deriveEvmAccount,
   deriveEvmPrivateKey,
   type EvmAddress,
+  type EvmPrivateKey,
 } from "../accounts/derivation";
 import { balanceService } from "../balances/balance.service";
 import { mnemonicService } from "../mnemonic/mnemonic.service";
@@ -44,7 +47,8 @@ import {
   type SendPreparedTransactionResult,
 } from "../transactions/send-asset.service";
 import { vaultService } from "../vault/vault.service";
-import type { EncryptedVault } from "../vault/vault.types";
+import { encryptionService } from "../vault/encryption.service";
+import type { EncryptedVault, VaultPayload } from "../vault/vault.types";
 const WATCHED_ASSETS_STORAGE_KEY = "watchedAssets";
 
 const ERC20_BALANCE_OF_ABI = [
@@ -89,6 +93,53 @@ import type {
   WalletOverview,
   WalletRuntimeState,
 } from "./wallet.types";
+
+// Normalize a user-entered private key: trim, add the 0x prefix if missing, and
+// validate the 32-byte hex shape. Throws a friendly error otherwise. Never logs
+// the value.
+function normalizeImportedPrivateKey(input: string): string {
+  const trimmed = input.trim();
+  const withPrefix = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(withPrefix)) {
+    throw new Error("Enter a valid EVM private key.");
+  }
+
+  return withPrefix.toLowerCase();
+}
+
+function createImportedAccountId(): WalletAccountId {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `imported-${Date.now()}-${Math.floor(performance.now())}`;
+}
+
+// Choose which account becomes active after the current one is removed. Prefer
+// the primary seed's first account, then the lowest primary index, then any
+// remaining signer, then any account at all (e.g. watch-only), else none.
+function pickFallbackAccountId(
+  accounts: WalletAccount[],
+): WalletAccountId | null {
+  const primary = accounts
+    .filter(
+      (account): account is MnemonicWalletAccount =>
+        account.type === "mnemonic",
+    )
+    .sort((a, b) => a.index - b.index);
+
+  if (primary.length > 0) {
+    return primary[0].id;
+  }
+
+  const signer = accounts.find((account) => account.type !== "watch");
+  if (signer) {
+    return signer.id;
+  }
+
+  return accounts[0]?.id ?? null;
+}
 
 export class WalletService {
   private unlockedVault: InternalUnlockedVault | null = null;
@@ -335,6 +386,249 @@ export class WalletService {
     };
   }
 
+  // Import an external wallet from a recovery phrase. Adds its first account as
+  // a signer. The phrase is stored ONLY inside the encrypted vault (re-encrypted
+  // under the existing wallet password, which is required to authorize this).
+  async importMnemonicAccount(input: {
+    mnemonic: string;
+    label?: string;
+    password: string;
+  }): Promise<{ walletState: WalletState; account: WalletAccount }> {
+    const validation = mnemonicService.validateMnemonic(input.mnemonic);
+
+    if (!validation.valid) {
+      throw new Error(validation.message);
+    }
+
+    const mnemonic = validation.mnemonic;
+    const derived = deriveEvmAccount(mnemonic, 0);
+    const address = getAddress(derived.address) as EvmAddress;
+
+    const walletState = await this.storage.getWalletState();
+    this.assertNoDuplicateAddress(walletState, address);
+
+    const payload = await this.unlockPayloadWithPassword(input.password);
+
+    const id = createImportedAccountId();
+    const nextPayload: VaultPayload = {
+      ...payload,
+      importedAccounts: [
+        ...(payload.importedAccounts ?? []),
+        { id, type: "importedMnemonic", mnemonic, index: 0 },
+      ],
+    };
+
+    const account: WalletAccount = {
+      id,
+      type: "importedMnemonic",
+      index: 0,
+      address,
+      label: input.label?.trim() || "Imported wallet",
+      derivationPath: derived.derivationPath,
+      createdAt: new Date().toISOString(),
+    };
+
+    return this.persistImportedAccount(
+      walletState,
+      account,
+      nextPayload,
+      input.password,
+    );
+  }
+
+  // Import an external wallet from a raw EVM private key. Adds one signer
+  // account. The key is stored ONLY inside the encrypted vault.
+  async importPrivateKeyAccount(input: {
+    privateKey: string;
+    label?: string;
+    password: string;
+  }): Promise<{ walletState: WalletState; account: WalletAccount }> {
+    const normalizedKey = normalizeImportedPrivateKey(input.privateKey);
+
+    let address: EvmAddress;
+    try {
+      address = getAddress(new Wallet(normalizedKey).address) as EvmAddress;
+    } catch {
+      throw new Error("Enter a valid EVM private key.");
+    }
+
+    const walletState = await this.storage.getWalletState();
+    this.assertNoDuplicateAddress(walletState, address);
+
+    const payload = await this.unlockPayloadWithPassword(input.password);
+
+    const id = createImportedAccountId();
+    const nextPayload: VaultPayload = {
+      ...payload,
+      importedAccounts: [
+        ...(payload.importedAccounts ?? []),
+        { id, type: "privateKey", privateKey: normalizedKey },
+      ],
+    };
+
+    const account: WalletAccount = {
+      id,
+      type: "privateKey",
+      index: null,
+      address,
+      label: input.label?.trim() || "Imported account",
+      derivationPath: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    return this.persistImportedAccount(
+      walletState,
+      account,
+      nextPayload,
+      input.password,
+    );
+  }
+
+  // Decrypt the vault with the supplied password (verifies it before we
+  // re-encrypt). Maps a decryption failure to a friendly message.
+  private async unlockPayloadWithPassword(
+    password: string,
+  ): Promise<VaultPayload> {
+    const encryptedVault = await this.getRequiredEncryptedVault();
+
+    try {
+      return await vaultService.unlockVault({ encryptedVault, password });
+    } catch {
+      throw new Error("Wrong wallet password.");
+    }
+  }
+
+  // Re-encrypt the vault with the added secret, append the account, select it,
+  // and refresh the in-memory unlocked payload so signing works immediately.
+  private async persistImportedAccount(
+    walletState: WalletState,
+    account: WalletAccount,
+    nextPayload: VaultPayload,
+    password: string,
+  ): Promise<{ walletState: WalletState; account: WalletAccount }> {
+    const nextVault = await encryptionService.encryptVaultPayload(
+      nextPayload,
+      password,
+    );
+
+    const nextWalletState: WalletState = {
+      ...walletState,
+      accounts: [...walletState.accounts, account],
+      selectedAccountId: account.id,
+    };
+
+    await this.storage.saveStoredWalletData({
+      encryptedVault: nextVault,
+      walletState: nextWalletState,
+    });
+
+    if (this.unlockedVault) {
+      this.unlockedVault = {
+        payload: nextPayload,
+        unlockedAt: this.unlockedVault.unlockedAt,
+      };
+    }
+
+    return { walletState: nextWalletState, account };
+  }
+
+  // Remove an imported signer account (seed phrase or private key). Deletes its
+  // encrypted secret from the vault AND its account record — not just a UI hide.
+  // Requires the wallet password to re-encrypt the vault. Primary-seed and
+  // watch-only accounts are rejected (they use their own flows).
+  async removeImportedAccount(input: {
+    accountId: WalletAccountId;
+    password: string;
+  }): Promise<{ walletState: WalletState; selectedAccount: WalletAccount | null }> {
+    const walletState = await this.storage.getWalletState();
+
+    const account = walletState.accounts.find(
+      (item) => item.id === input.accountId,
+    );
+
+    if (!account) {
+      throw new Error("Account not found.");
+    }
+
+    if (account.type !== "privateKey" && account.type !== "importedMnemonic") {
+      throw new Error("Only imported accounts can be removed here.");
+    }
+
+    // Verify the password and obtain the decrypted payload to rewrite it.
+    const payload = await this.unlockPayloadWithPassword(input.password);
+
+    // Drop this account's encrypted secret, then re-encrypt the vault.
+    const nextPayload: VaultPayload = {
+      ...payload,
+      importedAccounts: (payload.importedAccounts ?? []).filter(
+        (secret) => secret.id !== input.accountId,
+      ),
+    };
+
+    const nextVault = await encryptionService.encryptVaultPayload(
+      nextPayload,
+      input.password,
+    );
+
+    const remainingAccounts = walletState.accounts.filter(
+      (item) => item.id !== input.accountId,
+    );
+
+    // If the removed account was active, fall back to another account so the
+    // selection never points at a deleted address.
+    const nextSelectedId =
+      walletState.selectedAccountId === input.accountId
+        ? pickFallbackAccountId(remainingAccounts)
+        : walletState.selectedAccountId;
+
+    const nextWalletState: WalletState = {
+      ...walletState,
+      accounts: remainingAccounts,
+      selectedAccountId: nextSelectedId,
+    };
+
+    await this.storage.saveStoredWalletData({
+      encryptedVault: nextVault,
+      walletState: nextWalletState,
+    });
+
+    // Drop the secret from the in-memory unlocked payload too, so the removed
+    // account can no longer sign even while the wallet stays unlocked.
+    if (this.unlockedVault) {
+      this.unlockedVault = {
+        payload: nextPayload,
+        unlockedAt: this.unlockedVault.unlockedAt,
+      };
+    }
+
+    const selectedAccount = nextSelectedId
+      ? remainingAccounts.find((item) => item.id === nextSelectedId) ?? null
+      : null;
+
+    return { walletState: nextWalletState, selectedAccount };
+  }
+
+  // Reject duplicate imports. A clearer message when the address is already
+  // tracked as watch-only (it must be removed before importing as a signer).
+  private assertNoDuplicateAddress(
+    walletState: WalletState,
+    address: string,
+  ): void {
+    const existing = walletState.accounts.find(
+      (item) => item.address.toLowerCase() === address.toLowerCase(),
+    );
+
+    if (!existing) return;
+
+    if (existing.type === "watch") {
+      throw new Error(
+        "This address already exists as watch-only. Remove it first to import as a signer.",
+      );
+    }
+
+    throw new Error("This account is already added.");
+  }
+
   async selectAccount(
     input: SelectAccountInput,
   ): Promise<SelectAccountResult> {
@@ -359,6 +653,46 @@ export class WalletService {
       walletState: nextWalletState,
       selectedAccount,
     };
+  }
+
+  // Update an account's display label. Metadata only — does not touch keys,
+  // the encrypted vault, selection, or signing. Label is trimmed and bounded.
+  async renameAccount(input: {
+    accountId: WalletAccountId;
+    label: string;
+  }): Promise<{ walletState: WalletState; account: WalletAccount }> {
+    const label = input.label.trim();
+
+    if (!label) {
+      throw new Error("Account name cannot be empty.");
+    }
+    if (label.length > 32) {
+      throw new Error("Account name must be 32 characters or fewer.");
+    }
+
+    const currentWalletState = await this.storage.getWalletState();
+
+    let renamed: WalletAccount | null = null;
+    const accounts = currentWalletState.accounts.map((account) => {
+      if (account.id !== input.accountId) {
+        return account;
+      }
+      renamed = { ...account, label };
+      return renamed;
+    });
+
+    if (!renamed) {
+      throw new Error("Account not found.");
+    }
+
+    const nextWalletState: WalletState = {
+      ...currentWalletState,
+      accounts,
+    };
+
+    await this.storage.saveWalletState(nextWalletState);
+
+    return { walletState: nextWalletState, account: renamed };
   }
 
   async getSelectedBalance(): Promise<GetSelectedBalanceResult> {
@@ -418,8 +752,10 @@ export class WalletService {
       throw new Error("Watch-only wallet cannot send transactions.");
     }
 
-    const mnemonic = await this.getMnemonicForSensitiveOperation(input.password);
-    const privateKey = deriveEvmPrivateKey(mnemonic, selectedAccount.index);
+    const privateKey = await this.getPrivateKeyForAccount(
+      selectedAccount,
+      input.password,
+    );
 
     return sendAssetService.sendAsset({
       asset: input.asset,
@@ -443,8 +779,10 @@ export class WalletService {
       throw new Error("Watch-only wallet cannot send transactions.");
     }
 
-    const mnemonic = await this.getMnemonicForSensitiveOperation(input.password);
-    const privateKey = deriveEvmPrivateKey(mnemonic, selectedAccount.index);
+    const privateKey = await this.getPrivateKeyForAccount(
+      selectedAccount,
+      input.password,
+    );
 
     return sendAssetService.sendPreparedTransaction({
       transaction: input.transaction,
@@ -527,8 +865,10 @@ export class WalletService {
       });
     }
 
-    const mnemonic = await this.getMnemonicForSensitiveOperation(input.password);
-    const privateKey = deriveEvmPrivateKey(mnemonic, selectedAccount.index);
+    const privateKey = await this.getPrivateKeyForAccount(
+      selectedAccount,
+      input.password,
+    );
     const signer = new Wallet(privateKey);
 
     const signature = await signer.signTypedData(
@@ -615,7 +955,26 @@ export class WalletService {
       throw new Error("Watch-only wallet does not have a private key.");
     }
 
-    const privateKey = deriveEvmPrivateKey(payload.mnemonic, account.index);
+    let privateKey: EvmPrivateKey;
+
+    if (account.type === "mnemonic") {
+      privateKey = deriveEvmPrivateKey(payload.mnemonic, account.index);
+    } else {
+      const secret = (payload.importedAccounts ?? []).find(
+        (item) => item.id === account.id,
+      );
+
+      if (!secret) {
+        throw new Error(
+          "Key material for this imported account is missing. Re-import the account.",
+        );
+      }
+
+      privateKey =
+        secret.type === "privateKey"
+          ? (secret.privateKey as EvmPrivateKey)
+          : deriveEvmAccount(secret.mnemonic, secret.index).privateKey;
+    }
 
     return {
       account,
@@ -696,13 +1055,11 @@ export class WalletService {
       throw new Error("personal_sign message is missing.");
     }
 
-    const mnemonic = await this.getMnemonicForSensitiveOperation(input.password);
-    const derivationPath = (selectedAccount as { derivationPath?: string })
-      .derivationPath;
-
-    const signer = derivationPath
-      ? HDNodeWallet.fromPhrase(mnemonic, undefined, derivationPath)
-      : Wallet.fromPhrase(mnemonic);
+    const privateKey = await this.getPrivateKeyForAccount(
+      selectedAccount,
+      input.password,
+    );
+    const signer = new Wallet(privateKey);
 
     if (signer.address.toLowerCase() !== selectedAddress) {
       throw new Error("Derived signer does not match selected account.");
@@ -849,6 +1206,62 @@ export class WalletService {
     });
 
     return payload.mnemonic;
+  }
+
+  // Full decrypted vault payload (mnemonic + imported secrets) for operations
+  // that may need imported key material. Uses the in-memory unlocked vault when
+  // available, otherwise decrypts with the supplied password.
+  private async getDecryptedPayloadForSensitiveOperation(
+    password?: string,
+  ): Promise<VaultPayload> {
+    if (this.unlockedVault) {
+      return this.unlockedVault.payload;
+    }
+
+    if (!password) {
+      throw new Error("Password is required.");
+    }
+
+    const encryptedVault = await this.getRequiredEncryptedVault();
+
+    return vaultService.unlockVault({ encryptedVault, password });
+  }
+
+  // Resolve the signing private key for ANY signer account, regardless of
+  // source. Watch-only accounts throw. The private material never leaves this
+  // method's caller chain and is never persisted in plaintext.
+  private async getPrivateKeyForAccount(
+    account: WalletAccount,
+    password?: string,
+  ): Promise<EvmPrivateKey> {
+    if (account.type === "watch") {
+      throw new Error("Watch-only wallet cannot sign transactions.");
+    }
+
+    const payload =
+      await this.getDecryptedPayloadForSensitiveOperation(password);
+
+    // Primary-seed account: re-derive from the wallet mnemonic by index.
+    if (account.type === "mnemonic") {
+      return deriveEvmPrivateKey(payload.mnemonic, account.index);
+    }
+
+    // Imported account: look up its secret in the encrypted vault by id.
+    const secret = (payload.importedAccounts ?? []).find(
+      (item) => item.id === account.id,
+    );
+
+    if (!secret) {
+      throw new Error(
+        "Key material for this imported account is missing. Re-import the account.",
+      );
+    }
+
+    if (secret.type === "privateKey") {
+      return secret.privateKey as EvmPrivateKey;
+    }
+
+    return deriveEvmAccount(secret.mnemonic, secret.index).privateKey;
   }
 
   private async getRequiredEncryptedVault(): Promise<EncryptedVault> {
