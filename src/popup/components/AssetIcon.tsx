@@ -5,6 +5,7 @@ import {
   resolveTokenLogoCandidates,
   setCachedTokenLogo,
 } from "../../utils/token-logo-resolver";
+import { getNetworkIconUrl } from "./NetworkIcon";
 
 const TOKEN_ICONS: Record<string, string> = {
   BNB: "/token-icons/bnb.png",
@@ -86,6 +87,18 @@ export function AssetIcon({
   });
   for (const url of externalCandidates) {
     if (!sources.includes(url)) sources.push(url);
+  }
+
+  // 3. Native assets (no contract address) fall back to their network icon, so
+  // chains without a dedicated token PNG (e.g. native TRX on TRON) show the
+  // chain art instead of initials. Only used when an explicit logo and the
+  // hardcoded token icon above didn't already provide one — so ETH/BNB/Base
+  // native icons are unaffected.
+  if (resolvedAddress === null && chainId != null) {
+    const networkIcon = getNetworkIconUrl(chainId);
+    if (networkIcon && !sources.includes(networkIcon)) {
+      sources.push(networkIcon);
+    }
   }
 
   if (import.meta.env.DEV) {

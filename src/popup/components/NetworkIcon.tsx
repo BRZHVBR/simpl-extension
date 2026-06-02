@@ -18,6 +18,7 @@ const CHAIN_ID_TO_NAME: Record<number, string> = {
   42161: "arbitrum",
   10: "optimism",
   43114: "avalanche",
+  728126428: "tron",
 };
 
 // Sepolia reuses the Ethereum icon; the badge distinguishes it visually.
@@ -30,6 +31,7 @@ const ICON_FILE: Record<string, string> = {
   arbitrum: "/network-icons/arbitrum.svg",
   optimism: "/network-icons/optimism.svg",
   avalanche: "/network-icons/avalanche.svg",
+  tron: "/network-icons/tron.svg",
 };
 
 const FALLBACK_COLORS: Record<string, string> = {
@@ -41,6 +43,7 @@ const FALLBACK_COLORS: Record<string, string> = {
   arbitrum: "#213147",
   optimism: "#FF0420",
   avalanche: "#E84142",
+  tron: "#EB0029",
 };
 
 const TESTNET_NAMES = new Set(["sepolia"]);
@@ -68,8 +71,20 @@ function resolveNetworkName(
   if (raw.includes("arbitrum") || raw === "arb") return "arbitrum";
   if (raw.includes("optimism") || raw === "op") return "optimism";
   if (raw.includes("avalanche") || raw === "avax") return "avalanche";
+  if (raw.includes("tron") || raw === "trx") return "tron";
 
   return null;
+}
+
+// Public network icon URL for a chain (e.g. "/network-icons/tron.svg"), or null
+// when no icon is mapped. Lets other components (e.g. AssetIcon) reuse the same
+// network art without duplicating the chain→file mapping.
+export function getNetworkIconUrl(
+  chainId?: number | string | null,
+  networkName?: string | null,
+): string | null {
+  const name = resolveNetworkName(chainId, networkName ?? null, null);
+  return name ? (ICON_FILE[name] ?? null) : null;
 }
 
 export function NetworkIcon({

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" fill="#EB0029"/>
+  <!-- TRON logo: angular triangular mark -->
+  <path d="M7 9 L25 12.2 L15.2 25 L11.6 14.4 Z M9.7 11 L12.6 13.9 L20.7 12.6 Z M13.7 15 L15.4 21.1 L21.7 13.8 Z"
+        fill="#fff"/>
+</svg>
