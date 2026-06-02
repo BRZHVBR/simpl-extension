@@ -310,6 +310,46 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "SIMPLE_WALLETCONNECT_GET_SELECTED_TRON_ACCOUNT") {
+    void walletService
+      .getSelectedTronAccountInfo()
+      .then((account) => {
+        sendResponse({ ok: true, account });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_TRON_SIGN_TRANSACTION") {
+    // WC TRON params arrive as the tx object, [tx], or { transaction: tx }.
+    const raw = message.params;
+    const unwrapped = Array.isArray(raw) ? raw[0] : raw;
+    const transaction =
+      unwrapped &&
+      typeof unwrapped === "object" &&
+      (unwrapped as Record<string, unknown>).transaction &&
+      typeof (unwrapped as Record<string, unknown>).transaction === "object"
+        ? (unwrapped as Record<string, unknown>).transaction
+        : unwrapped;
+
+    void walletService
+      .signTronDappTransaction({
+        transaction,
+        password: typeof message.password === "string" ? message.password : undefined,
+      })
+      .then((result) => {
+        sendResponse({ ok: true, result });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+
+    return true;
+  }
+
   if (message?.type === "SIMPLE_WALLETCONNECT_SEND_PREPARED_TRANSACTION") {
     void walletService
       .sendSelectedPreparedTransaction({
@@ -932,6 +972,20 @@ async function handleTronDappRequest(
         if (await getDappConnectionForOrigin(origin)) {
           sendResponse({ ok: true, result: [info.base58] });
           return;
+        }
+
+        // A connect approval for this origin is already open — EIP-1193 -32002.
+        for (const existing of pendingDappApprovals.values()) {
+          if (existing.origin === origin && existing.kind === "tron_connect") {
+            sendResponse({
+              ok: false,
+              error: {
+                code: -32002,
+                message: "A connection request is already pending. Open SIMPL to continue.",
+              },
+            });
+            return;
+          }
         }
 
         const approvalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;

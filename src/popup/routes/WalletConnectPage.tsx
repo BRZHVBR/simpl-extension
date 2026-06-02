@@ -809,7 +809,8 @@ function canApprovePendingRequest(method: string): boolean {
     method === "eth_sendTransaction" ||
     method === "eth_signTypedData_v4" ||
     method === "personal_sign" ||
-    method === "wallet_watchAsset"
+    method === "wallet_watchAsset" ||
+    method === "tron_signTransaction"
   );
 }
 
@@ -1116,6 +1117,17 @@ function getWalletConnectApprovalView(
         previewTitle: "Transaction preview",
         previewText: getWcPreviewTextV2(method, params),
         primaryLabel: "Confirm transaction",
+        requiresPassword: true,
+      };
+
+    case "tron_signTransaction":
+      return {
+        title: "Sign TRON transaction",
+        description: "A connected dApp is requesting a TRON transaction signature from SIMPLE.",
+        status: "TRON signature required",
+        previewTitle: "Transaction preview",
+        previewText: formatRequestParams(params),
+        primaryLabel: "Sign",
         requiresPassword: true,
       };
 
@@ -1604,6 +1616,31 @@ export default function WalletConnectPage({
     setSessions(next);
   }
 
+  // The offscreen engine processes (and auto-approves or rejects) the session
+  // proposal asynchronously after pairing. If approval failed — e.g. an
+  // unsupported TRON method/chain — it records the reason in storage. Surface a
+  // fresh error (newer than this pairing attempt) so the user sees why.
+  async function surfaceRecentProposalError(since: number): Promise<void> {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      const stored = await chromeStorageGet("lastWalletConnectProposalError");
+      const err = stored["lastWalletConnectProposalError"] as
+        | { message?: string; createdAt?: string }
+        | undefined;
+
+      if (
+        err?.message &&
+        err.createdAt &&
+        new Date(err.createdAt).getTime() >= since
+      ) {
+        setWcError(makeWcError("generic", err.message));
+        setStatus("Connection failed.");
+        return;
+      }
+    }
+  }
+
   async function pair(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1614,6 +1651,7 @@ export default function WalletConnectPage({
       return;
     }
 
+    const pairStartedAt = Date.now();
     setIsPairing(true);
     setWcError(null);
     setStatus("Connecting to dApp...");
@@ -1641,6 +1679,7 @@ export default function WalletConnectPage({
       setStatus("Waiting for dApp approval...");
       await onConnected?.();
       await loadSessions();
+      await surfaceRecentProposalError(pairStartedAt);
     } catch (nextError) {
       const msg = nextError instanceof Error ? nextError.message : "";
 
@@ -1726,7 +1765,7 @@ export default function WalletConnectPage({
     setStatus(`Approving ${pendingRequest.method}…`);
 
     try {
-      const needsPassword = ["eth_sendTransaction", "eth_signTypedData_v4", "personal_sign"].includes(
+      const needsPassword = ["eth_sendTransaction", "eth_signTypedData_v4", "personal_sign", "tron_signTransaction"].includes(
         pendingRequest.method,
       );
 
@@ -1842,7 +1881,8 @@ export default function WalletConnectPage({
     const requiresPassword =
       method === "eth_sendTransaction" ||
       method === "eth_signTypedData_v4" ||
-      method === "personal_sign";
+      method === "personal_sign" ||
+      method === "tron_signTransaction";
 
     const canApprove =
       !isResponding &&

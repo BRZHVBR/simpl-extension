@@ -275,15 +275,44 @@
         if (r && typeof r.base58 === "string") {
           setTronAccount(r.base58, typeof r.hex === "string" ? r.hex : null);
         }
+        tronDebugLog("hydrated");
       })
       .catch(() => {
         // Not connected or wallet locked — leave window.tronWeb un-hydrated.
       });
   }
 
+  // Dev-only diagnostics. Opt in by running `localStorage.SIMPL_TRON_DEBUG = "1"`
+  // on the page, then reload. NEVER logs private keys, mnemonic, signed tx, or
+  // decrypted wallet — only provider presence + the PUBLIC address and chain id.
+  function tronDebugEnabled(): boolean {
+    try {
+      return window.localStorage.getItem("SIMPL_TRON_DEBUG") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function tronDebugLog(stage: string): void {
+    if (!tronDebugEnabled()) return;
+    try {
+      console.log("[SIMPL TRON]", stage, {
+        tron: typeof win["tron"] !== "undefined",
+        tronWeb: typeof win["tronWeb"] !== "undefined",
+        tronLink: typeof win["tronLink"] !== "undefined",
+        selectedAddress: tron.selectedAddress,
+        chainId: tron.chainId,
+      });
+    } catch {
+      // Diagnostics must never throw.
+    }
+  }
+
   win["tron"] = tron;
   if (!win["tronLink"]) win["tronLink"] = tron;
   if (!win["tronWeb"]) win["tronWeb"] = tronWeb;
+
+  tronDebugLog("injected");
 
   // Hydrate on load so an already-connected dApp detects SIMPL immediately.
   hydrateTron();
