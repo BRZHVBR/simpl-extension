@@ -16,11 +16,9 @@ import {
 import { tokenPriceService } from "../../core/prices/token-price.service";
 import {
   priceHistoryService,
-  type PricePoint,
   type PriceHistoryRange,
 } from "../../core/prices/price-history.service";
 import {
-  canResolveChart,
   countsTowardTotalBalance,
   isKnownPriceAsset,
 } from "../../core/prices/price-identity";
@@ -28,8 +26,15 @@ import {
   marketDataService,
   type AssetMarketData,
 } from "../../core/prices/market-data.service";
-import { resolveAsset } from "../../core/prices/simpl-market-api.service";
-import { PriceSparkline } from "../components/PriceSparkline";
+import {
+  resolveAsset,
+  getPriceOhlc,
+} from "../../core/prices/simpl-market-api.service";
+import {
+  PriceChart,
+  type ChartPoint,
+  type CandlePoint,
+} from "../components/PriceChart";
 import { walletService } from "../../core/wallet/wallet.service";
 import { customTokenService } from "../../core/tokens/custom-token.service";
 import { hiddenAssetService } from "../../core/tokens/hidden-asset.service";
@@ -90,6 +95,23 @@ const PORTFOLIO_RETRY_DELAYS_MS = [3000, 5000, 10000, 20000, 30000];
 const VALUATION_CURRENCIES: ValuationCurrency[] = ["USD", "USDT", "EUR"];
 
 const VALUATION_STORAGE_KEY = "simple:nativeValuationCurrency";
+
+// Asset Detail chart type preference (Line vs Candles), persisted across views.
+type ChartTypePref = "candles" | "line";
+const CHART_MODE_STORAGE_KEY = "simpl.assetChartMode";
+
+function getInitialChartMode(): ChartTypePref {
+  // Wallet Asset Detail defaults to the clean line/area chart — candles are an
+  // opt-in secondary mode. We only honour a saved preference once the user has
+  // manually switched; with no saved value we default to "line".
+  try {
+    const saved = window.localStorage.getItem(CHART_MODE_STORAGE_KEY);
+    if (saved === "line" || saved === "candles") return saved;
+  } catch {
+    // localStorage is optional.
+  }
+  return "line";
+}
 
 // Canonical network name from the chain registry (single source of truth).
 const getNetworkLabel = getNetworkDisplayName;
@@ -274,6 +296,13 @@ function formatAssetBalance(asset: WalletAssetBalance): string {
 
 function formatFiatValue(value: number | null, currency: "USD" | "EUR"): string {
   if (value === null || !Number.isFinite(value)) return "—";
+
+  // Tiny but non-zero amounts would round to "$0.00" and read as worthless —
+  // show "<$0.01" instead so micro-balances/prices stay legible.
+  if (value > 0 && value < 0.01) {
+    const symbol = currency === "EUR" ? "€" : "$";
+    return `<${symbol}0.01`;
+  }
 
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -535,11 +564,27 @@ export function HomePage(props: HomePageProps) {
   );
   const [assetDetails, setAssetDetails] = useState<WalletAssetBalance | null>(null);
   // Price chart (AssetDetailsPage). Hidden when no history is available.
+  // Both datasets are fetched per asset/range so the user can toggle chart type
+  // instantly. `chartMode` is the user's persisted *preference*; the rendered
+  // type is resolved against what data is actually available (see resolvedMode).
   const [chartRange, setChartRange] = useState<PriceHistoryRange>("7D");
-  const [chartPoints, setChartPoints] = useState<PricePoint[] | null>(null);
+  const [chartPoints, setChartPoints] = useState<ChartPoint[] | null>(null);
+  const [chartCandles, setChartCandles] = useState<CandlePoint[] | null>(null);
+  const [chartMode, setChartMode] = useState<ChartTypePref>(
+    getInitialChartMode,
+  );
   const [chartStatus, setChartStatus] = useState<
     "idle" | "loading" | "ready" | "empty"
   >("idle");
+
+  function selectChartMode(mode: ChartTypePref) {
+    setChartMode(mode);
+    try {
+      window.localStorage.setItem(CHART_MODE_STORAGE_KEY, mode);
+    } catch {
+      // Persistence is optional.
+    }
+  }
   // Market data (24h change + 24h volume) for the open asset. Independent of
   // the chart so volume can show even when history is unavailable.
   const [marketData, setMarketData] = useState<AssetMarketData | null>(null);
@@ -926,42 +971,72 @@ export function HomePage(props: HomePageProps) {
     setCopied(false);
   }, [assetDetails?.id, props.selectedAccount?.address]);
 
-  // Load price history for the open asset / selected range. Uses the same
-  // identity as spot prices (native coin id, or chainId + contract address).
-  // No data → "empty" (the chart card is hidden).
+  // Load chart data for the open asset / selected range, all via the gateway.
+  // We fetch BOTH real OHLC candles (/v1/prices/ohlc) and line history
+  // (/v1/prices/history) in parallel so the user can toggle Line/Candles with no
+  // refetch. Candles and line are kept independent — we never synthesize candles
+  // from line points or vice-versa. Native assets AND tokens (incl. stablecoins)
+  // get a chart whenever the backend returns data; no client-side allow-list.
+  // Neither dataset available → "empty" (graceful "Chart unavailable").
   useEffect(() => {
     if (!assetDetails) return;
 
     let active = true;
     const isNative = isNativeAsset(assetDetails);
     const address = isNative ? null : assetDetails.contractAddress ?? null;
+    const range = chartRange;
 
-    // Skip assets where a chart isn't meaningful (no contract, stablecoins,
-    // unmapped chains) — keeps the card hidden instead of flashing a loader.
-    if ((!isNative && !address) || !canResolveChart(assetDetails.chainId, address)) {
+    // Only requirement: a resolvable asset (native, or a token with an address).
+    if (!isNative && !address) {
       setChartPoints(null);
+      setChartCandles(null);
       setChartStatus("empty");
       return;
     }
 
+    const backendRange =
+      range === "1D" ? "1d" : range === "7D" ? "7d" : "1m";
+
     setChartStatus("loading");
 
-    void priceHistoryService
-      .getAssetPriceHistory({
-        chainId: assetDetails.chainId,
-        address,
-        range: chartRange,
-      })
-      .then((points) => {
-        if (!active) return;
-        if (points && points.length >= 2) {
-          setChartPoints(points);
-          setChartStatus("ready");
-        } else {
-          setChartPoints(null);
-          setChartStatus("empty");
-        }
-      });
+    void (async () => {
+      const [ohlc, points] = await Promise.all([
+        // Real OHLC candles. Empty/unavailable just means no candle mode — no
+        // fake candles are ever synthesized.
+        getPriceOhlc({
+          chainId: assetDetails.chainId,
+          address,
+          range: backendRange,
+        }),
+        // Line/area history.
+        priceHistoryService.getAssetPriceHistory({
+          chainId: assetDetails.chainId,
+          address,
+          range,
+        }),
+      ]);
+      if (!active) return;
+
+      const candles = ohlc?.candles;
+      const nextCandles =
+        Array.isArray(candles) && candles.length >= 2
+          ? candles.map((c) => ({
+              t: c.t,
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+            }))
+          : null;
+      const nextPoints =
+        points && points.length >= 2
+          ? points.map((p) => ({ t: p.timestamp, price: p.price }))
+          : null;
+
+      setChartCandles(nextCandles);
+      setChartPoints(nextPoints);
+      setChartStatus(nextCandles || nextPoints ? "ready" : "empty");
+    })();
 
     return () => {
       active = false;
@@ -1000,6 +1075,8 @@ export function HomePage(props: HomePageProps) {
     setConfirmHide(false);
     setChartRange("7D");
     setChartPoints(null);
+    setChartCandles(null);
+    // Keep the user's persisted Line/Candles preference across assets.
     setChartStatus("idle");
     setMarketData(null);
   }
@@ -1174,12 +1251,32 @@ export function HomePage(props: HomePageProps) {
     // price but never imply real value — matched to the total-balance rule.
     const isReference = !countsTowardTotalBalance(asset.chainId);
 
-    // Chart change %: compares first vs last point of the selected range.
-    const chartFirst = chartPoints?.[0]?.price ?? null;
+    // Resolve which chart type actually renders: honour the user's preference
+    // when the data exists, otherwise gracefully fall back to the other one.
+    const candlesOk = (chartCandles?.length ?? 0) >= 2;
+    const lineOk = (chartPoints?.length ?? 0) >= 2;
+    const resolvedMode: "candles" | "area" =
+      chartMode === "candles"
+        ? candlesOk
+          ? "candles"
+          : "area"
+        : lineOk
+          ? "area"
+          : "candles";
+
+    // Chart change %: range start vs range end, from the rendered dataset.
+    // Candles use the first candle's open and the last candle's close; line
+    // history uses first vs last point.
+    const chartFirst =
+      resolvedMode === "candles" && chartCandles?.length
+        ? chartCandles[0].open
+        : chartPoints?.[0]?.price ?? null;
     const chartLast =
-      chartPoints && chartPoints.length > 0
-        ? chartPoints[chartPoints.length - 1].price
-        : null;
+      resolvedMode === "candles" && chartCandles?.length
+        ? chartCandles[chartCandles.length - 1].close
+        : chartPoints && chartPoints.length > 0
+          ? chartPoints[chartPoints.length - 1].price
+          : null;
     const chartChangePct =
       chartFirst && chartLast && chartFirst !== 0
         ? ((chartLast - chartFirst) / chartFirst) * 100
@@ -1408,13 +1505,21 @@ export function HomePage(props: HomePageProps) {
                 </div>
 
                 <div className="asset-chart-body">
-                  {chartStatus === "ready" && chartPoints ? (
-                    <PriceSparkline points={chartPoints} positive={chartPositive} />
+                  {chartStatus === "ready" && (chartPoints || chartCandles) ? (
+                    <PriceChart
+                      points={chartPoints ?? undefined}
+                      candles={chartCandles ?? undefined}
+                      mode={resolvedMode}
+                      positive={chartPositive}
+                      currency="usd"
+                      height={210}
+                    />
                   ) : (
                     <div className="asset-chart-loading">Loading chart…</div>
                   )}
                 </div>
 
+                {/* Range buttons: cleanly centered, on their own row. */}
                 <div className="asset-chart-ranges">
                   {(["1D", "7D", "1M"] as PriceHistoryRange[]).map((range) => (
                     <button
@@ -1429,6 +1534,38 @@ export function HomePage(props: HomePageProps) {
                     </button>
                   ))}
                 </div>
+
+                {/* Chart type is a secondary/advanced control: only shown when
+                    real OHLC candles exist for this asset/range. Line stays the
+                    wallet default; selecting Line always uses /v1/prices/history
+                    even when candles exist. Hidden entirely for line-only assets
+                    (USDT/MNT/…) so it never competes with the range buttons. */}
+                {candlesOk ? (
+                  <div
+                    className="asset-chart-type"
+                    role="group"
+                    aria-label="Chart type"
+                  >
+                    <button
+                      type="button"
+                      className={`asset-chart-type-btn${
+                        resolvedMode === "area" ? " asset-chart-type-btn--active" : ""
+                      }`}
+                      onClick={() => selectChartMode("line")}
+                    >
+                      Line
+                    </button>
+                    <button
+                      type="button"
+                      className={`asset-chart-type-btn${
+                        resolvedMode === "candles" ? " asset-chart-type-btn--active" : ""
+                      }`}
+                      onClick={() => selectChartMode("candles")}
+                    >
+                      Candles
+                    </button>
+                  </div>
+                ) : null}
               </section>
             ) : showMarketFallback ? (
               // No chart (stablecoin / history unavailable) but the asset has a
@@ -1631,9 +1768,11 @@ export function HomePage(props: HomePageProps) {
               </button>
             </section>
 
-            {/* Hide / Remove — ERC-20 only */}
+            {/* Manage token — ERC-20 only. A quiet section at the very bottom so
+                the destructive actions never dominate the screen. */}
             {!isNative ? (
-              <>
+              <section className="asset-details-manage">
+                <div className="asset-details-manage-title">Manage token</div>
                 <div className="asset-details-secondary-actions">
                   <button
                     type="button"
@@ -1656,7 +1795,7 @@ export function HomePage(props: HomePageProps) {
                   This only changes your wallet view. Your on-chain tokens are
                   not moved or deleted.
                 </div>
-              </>
+              </section>
             ) : null}
           </div>
         )}

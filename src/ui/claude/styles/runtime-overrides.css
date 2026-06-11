@@ -3722,11 +3722,48 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
   color: var(--ink-1) !important;
 }
 
+/* Range buttons: cleanly centered on their own row. */
 .asset-chart-ranges {
   display: flex !important;
   justify-content: center !important;
   gap: 4px !important;
+  margin-top: 12px !important;
+}
+
+/* Chart type: a quiet, secondary control centered below the range buttons.
+   Smaller and lighter than the ranges so candles never compete with them. */
+.asset-chart-type {
+  display: flex !important;
+  justify-content: center !important;
+  gap: 2px !important;
   margin-top: 8px !important;
+  padding: 2px !important;
+  width: fit-content !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  border-radius: 999px !important;
+  background: var(--bg-subtle, rgba(148, 163, 184, 0.1)) !important;
+}
+
+.asset-chart-type-btn {
+  height: 19px !important;
+  padding: 0 10px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  font-family: inherit !important;
+  cursor: pointer !important;
+}
+
+.asset-chart-type-btn--active {
+  background: var(--bg-surface, #ffffff) !important;
+  color: var(--ink-1, #111111) !important;
+  font-weight: 700 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
 }
 
 /* Compact market card — shown when there's no chart but the asset has a
@@ -3787,20 +3824,58 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
 
 .asset-chart-body {
   margin-top: 8px !important;
-  height: 120px !important;
+  position: relative !important;
 }
 
-.asset-chart-body .price-sparkline {
-  display: block !important;
+/* Interactive lightweight-charts container. The component owns its height; the
+   canvas fills the card width responsively via a ResizeObserver. */
+.price-chart {
+  position: relative !important;
   width: 100% !important;
-  height: 100% !important;
 }
 
-/* Popup: keep the chart compact so the actions stay reachable. */
-@media (max-width: 420px), (max-height: 650px) {
-  .asset-chart-body {
-    height: 100px !important;
-  }
+.price-chart__canvas {
+  width: 100% !important;
+}
+
+/* Floating crosshair tooltip (date + price). Positioned by the component via a
+   translate transform; pointer-events off so it never blocks the crosshair. */
+.price-chart__tooltip {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  pointer-events: none !important;
+  z-index: 5 !important;
+  margin: 8px 0 0 10px !important;
+  padding: 5px 8px !important;
+  border-radius: 8px !important;
+  background: var(--surface, #ffffff) !important;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.08)) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
+  white-space: nowrap !important;
+}
+
+.price-chart__tooltip-price {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  font-family: var(--font-mono, monospace) !important;
+  color: var(--ink-1, #111) !important;
+}
+
+.price-chart__tooltip-date {
+  margin-top: 1px !important;
+  font-size: 10px !important;
+  color: var(--ink-3, #888) !important;
+}
+
+.price-chart__loading {
+  position: absolute !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 12px !important;
+  color: var(--ink-3) !important;
 }
 
 .asset-chart-loading {
@@ -3881,6 +3956,23 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
 }
 
 /* Hide / Remove secondary actions */
+/* Quiet "Manage token" zone — separated and de-emphasised so destructive
+   actions sit calmly at the bottom of the page. */
+.asset-details-manage {
+  margin-top: 18px !important;
+  padding-top: 14px !important;
+  border-top: 1px solid var(--line) !important;
+}
+
+.asset-details-manage-title {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: var(--ink-3) !important;
+  margin-bottom: 10px !important;
+}
+
 .asset-details-secondary-actions {
   display: flex !important;
   flex-direction: column !important;

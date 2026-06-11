@@ -23,7 +23,8 @@ export type AssetMarketData = {
   priceUsd?: number;
   priceChange24hPct?: number;
   volume24hUsd?: number;
-  // Provider identity used (coin id or "contract") — for diagnostics.
+  marketCapUsd?: number;
+  // Provider identity used (price source / market-data source) — diagnostics.
   source?: string;
   updatedAt: number;
 };
@@ -107,6 +108,9 @@ export class MarketDataService {
         chainId: input.chainId,
         address: input.address,
         vs: "usd",
+        // Ask for 24h volume / market cap enrichment — without this the gateway
+        // returns price-only and volume24h is always null.
+        includeMarket: true,
       });
 
       if (!spot || typeof spot.price !== "number" || !Number.isFinite(spot.price)) {
@@ -134,12 +138,30 @@ export class MarketDataService {
       ) {
         data.volume24hUsd = spot.volume24h;
       }
+      if (
+        typeof spot.marketCap === "number" &&
+        Number.isFinite(spot.marketCap)
+      ) {
+        data.marketCapUsd = spot.marketCap;
+      }
+
+      // Volume / market cap enrichment (coingecko) is intermittent at the
+      // gateway — a later price-only response would otherwise wipe a volume we
+      // already showed, flapping it to "—". Carry forward the last real value
+      // when this response omits it (no fabrication — it's a value we received).
+      if (data.volume24hUsd == null && cached?.volume24hUsd != null) {
+        data.volume24hUsd = cached.volume24hUsd;
+      }
+      if (data.marketCapUsd == null && cached?.marketCapUsd != null) {
+        data.marketCapUsd = cached.marketCapUsd;
+      }
 
       writeCache(input.chainId, input.address, data);
       priceDebug("market ok", {
         chainId: input.chainId,
         address: input.address,
         source: data.source,
+        marketDataSource: spot.marketDataSource ?? null,
         hasVolume: data.volume24hUsd != null,
       });
       return data;

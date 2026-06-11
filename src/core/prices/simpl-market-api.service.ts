@@ -74,8 +74,13 @@ export type SimplSpotPrice = {
   price: number;
   currency: string;
   change24h?: number | null;
+  // volume24h / marketCap / marketDataSource / logoUrl are only populated when
+  // the request asks for market enrichment (include=market). `source` is the
+  // price source; `marketDataSource` is the enrichment source (e.g. coingecko).
   volume24h?: number | null;
   marketCap?: number | null;
+  marketDataSource?: string | null;
+  logoUrl?: string | null;
   source?: string;
   cached?: boolean;
   updatedAt?: string;
@@ -99,6 +104,28 @@ export type SimplHistoryResult = {
   range: string;
   currency: string;
   points: SimplHistoryPoint[];
+  source?: string;
+  cached?: boolean;
+  updatedAt?: string;
+};
+
+// OHLC candle from /v1/prices/ohlc. `t` is epoch milliseconds.
+export type SimplCandlePoint = {
+  t: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
+export type SimplOhlcResult = {
+  assetId?: string;
+  chainId: string;
+  address: string;
+  symbol?: string;
+  range: string;
+  currency: string;
+  candles: SimplCandlePoint[];
   source?: string;
   cached?: boolean;
   updatedAt?: string;
@@ -155,10 +182,13 @@ async function fetchJson<T>(
 }
 
 // GET /v1/prices/spot — single asset spot price (+ 24h change when available).
+// Pass includeMarket to also request 24h volume / market cap / logo enrichment
+// (`include=market`); without it the gateway returns price-only (volume null).
 export async function getSpotPrice(params: {
   chainId: number;
   address: string | null;
   vs?: VsCurrency;
+  includeMarket?: boolean;
 }): Promise<SimplSpotPrice | null> {
   const vs = params.vs ?? "usd";
   const search = new URLSearchParams({
@@ -166,6 +196,9 @@ export async function getSpotPrice(params: {
     address: toBackendAddress(params.address),
     vs,
   });
+  if (params.includeMarket) {
+    search.set("include", "market");
+  }
   try {
     return await fetchJson<SimplSpotPrice>(
       `${API_BASE_URL}/v1/prices/spot?${search.toString()}`,
@@ -243,6 +276,38 @@ export async function getPriceHistory(params: {
   }
 }
 
+// GET /v1/prices/ohlc — OHLC candles for one asset over a range. Optional: the
+// gateway may not have candles for every asset/range, in which case it returns
+// an empty `candles` array (or 404), and the caller falls back to the line
+// history from getPriceHistory. Returns null only on a transport/parse error.
+export async function getPriceOhlc(params: {
+  chainId: number;
+  address: string | null;
+  range: SimplHistoryRange;
+  vs?: VsCurrency;
+}): Promise<SimplOhlcResult | null> {
+  const vs = params.vs ?? "usd";
+  const search = new URLSearchParams({
+    chainId: toBackendChainId(params.chainId),
+    address: toBackendAddress(params.address),
+    range: params.range,
+    vs,
+  });
+  try {
+    return await fetchJson<SimplOhlcResult>(
+      `${API_BASE_URL}/v1/prices/ohlc?${search.toString()}`,
+    );
+  } catch (error) {
+    priceWarn("simpl ohlc failed", {
+      chainId: params.chainId,
+      address: params.address,
+      range: params.range,
+      error: String(error),
+    });
+    return null;
+  }
+}
+
 // GET /v1/assets/resolve — identity normalization + the gateway's
 // includeInTotalBalance verdict for an asset.
 export async function resolveAsset(params: {
@@ -296,6 +361,7 @@ export const simplMarketApi = {
   getSpotPrice,
   getBatchPrices,
   getPriceHistory,
+  getPriceOhlc,
   resolveAsset,
   getAssetMetadata,
 };

@@ -1,5 +1,4 @@
 import {
-  canResolveChart,
   getPriceIdentityKey,
   priceDebug,
   priceWarn,
@@ -110,17 +109,11 @@ function normalizePoints(
 
 export class PriceHistoryService {
   async getAssetPriceHistory(input: HistoryInput): Promise<PricePoint[] | null> {
-    // Skip assets where a chart isn't meaningful (stablecoins, unmapped chains)
-    // so we never render a flat/empty chart or fire a doomed request.
-    if (!canResolveChart(input.chainId, input.address)) {
-      priceDebug("history skip", {
-        chainId: input.chainId,
-        address: input.address,
-        range: input.range,
-      });
-      return null;
-    }
-
+    // Let the gateway decide whether history exists — no client-side allow-list.
+    // Stablecoins, non-native tokens and any asset with a resolvable identity
+    // all get a request; the gateway returns points (→ line chart) or empty
+    // (→ null, graceful). This is what lets USDT/MNT etc. show a line chart even
+    // though they have no OHLC candles.
     const fresh = readFreshCache(input);
     if (fresh) {
       priceDebug("history cache", {

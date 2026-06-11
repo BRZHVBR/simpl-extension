@@ -36,6 +36,7 @@
     "@walletconnect/utils": "^2.23.9",
     "ethereum-blockies-base64": "^1.0.2",
     "ethers": "^6.16.0",
+    "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.17.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.6",
