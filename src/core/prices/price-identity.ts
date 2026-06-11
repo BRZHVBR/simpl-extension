@@ -18,6 +18,10 @@ import {
   BNB_SMART_CHAIN_ID,
   ETHEREUM_MAINNET_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+  SOLANA_DEVNET_CHAIN_ID,
 } from "../networks/chain-registry";
 
 // Marker used in place of a contract address for a chain's native asset.
@@ -54,8 +58,65 @@ export function getCoinGeckoPlatform(chainId: number): string | null {
   return null;
 }
 
+// CoinGecko market id for the non-EVM native assets (Bitcoin / Solana), or null
+// for any other chain. Both the testnet (BTC Testnet, Solana Devnet) and the
+// mainnet map to the SAME mainnet market id — testnets have no market of their
+// own, so they borrow the mainnet price/chart purely as a *reference*. Whether
+// that reference may count as real portfolio value is decided separately by
+// isReferencePriceChain().
+export function getNativeAssetMarketId(
+  chainId: number,
+): "bitcoin" | "solana" | null {
+  if (
+    chainId === BITCOIN_MAINNET_CHAIN_ID ||
+    chainId === BITCOIN_TESTNET_CHAIN_ID
+  ) {
+    return "bitcoin";
+  }
+  if (
+    chainId === SOLANA_MAINNET_CHAIN_ID ||
+    chainId === SOLANA_DEVNET_CHAIN_ID
+  ) {
+    return "solana";
+  }
+  return null;
+}
+
+// True for chains whose native asset only has a *reference* price: a testnet /
+// devnet that borrows a mainnet coin's market data for display, but whose
+// balance must NEVER count as real portfolio value. (Bitcoin Testnet, Solana
+// Devnet.) Used purely for the "Reference price" UI labelling — total-balance
+// inclusion is decided by countsTowardTotalBalance() below.
+export function isReferencePriceChain(chainId: number): boolean {
+  return (
+    chainId === BITCOIN_TESTNET_CHAIN_ID || chainId === SOLANA_DEVNET_CHAIN_ID
+  );
+}
+
+// Local allowlist safeguard for total-balance inclusion. ONLY mainnets with
+// real market value count toward the portfolio total; every testnet/devnet is
+// excluded. This mirrors the Simpl API resolver's `includeInTotalBalance`
+// verdict and is the authoritative client-side guard: it works offline and
+// never relies on UI labels. The gateway's resolve response can only further
+// *exclude* an asset (defence in depth), never include one this rejects.
+//
+//   include → Ethereum (1), BSC (56), Base (8453), Bitcoin, Solana
+//   exclude → Sepolia (11155111), Bitcoin Testnet, Solana Devnet
+const TOTAL_BALANCE_MAINNET_CHAIN_IDS = new Set<number>([
+  ETHEREUM_MAINNET_CHAIN_ID,
+  BNB_SMART_CHAIN_ID,
+  BASE_CHAIN_ID,
+  BITCOIN_MAINNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+]);
+
+export function countsTowardTotalBalance(chainId: number): boolean {
+  return TOTAL_BALANCE_MAINNET_CHAIN_IDS.has(chainId);
+}
+
 // CoinGecko coin id for a chain's native asset. Sepolia is mapped to ethereum
-// to stay consistent with the native spot price service.
+// to stay consistent with the native spot price service. Bitcoin and Solana
+// (mainnet + testnet/devnet) resolve to their mainnet market id.
 export function getNativeCoinId(chainId: number): string | null {
   if (
     chainId === ETHEREUM_MAINNET_CHAIN_ID ||
@@ -65,7 +126,7 @@ export function getNativeCoinId(chainId: number): string | null {
     return "ethereum";
   }
   if (chainId === BNB_SMART_CHAIN_ID) return "binancecoin";
-  return null;
+  return getNativeAssetMarketId(chainId);
 }
 
 // Known assets keyed by stable price identity. Addresses are lowercase; native

@@ -21,12 +21,14 @@ import {
 } from "../../core/prices/price-history.service";
 import {
   canResolveChart,
+  countsTowardTotalBalance,
   isKnownPriceAsset,
 } from "../../core/prices/price-identity";
 import {
   marketDataService,
   type AssetMarketData,
 } from "../../core/prices/market-data.service";
+import { resolveAsset } from "../../core/prices/simpl-market-api.service";
 import { PriceSparkline } from "../components/PriceSparkline";
 import { walletService } from "../../core/wallet/wallet.service";
 import { customTokenService } from "../../core/tokens/custom-token.service";
@@ -34,7 +36,11 @@ import { hiddenAssetService } from "../../core/tokens/hidden-asset.service";
 import {
   getChainById,
   getNetworkDisplayName,
+  getCompactNetworkName,
   isTronChainId,
+  isBitcoinChainId,
+  isSolanaChainId,
+  SOLANA_DEVNET_CHAIN_ID,
 } from "../../core/networks/chain-registry";
 import { SelectNetworkPage } from "../components/SelectNetworkPage";
 import {
@@ -177,6 +183,13 @@ function getExplorerAddressUrl(chainId: number, address: string): string | null 
     return `https://tronscan.org/#/address/${address}`;
   }
 
+  // Solscan uses /account/<addr> and a ?cluster=devnet query for devnet.
+  if (isSolanaChainId(chainId)) {
+    const cluster =
+      chainId === SOLANA_DEVNET_CHAIN_ID ? "?cluster=devnet" : "";
+    return `https://solscan.io/account/${address}${cluster}`;
+  }
+
   const base = getExplorerBaseUrl(chainId);
   return base ? `${base}/address/${address}` : null;
 }
@@ -187,6 +200,13 @@ function getExplorerTokenUrl(
 ): string | null {
   if (isTronChainId(chainId)) {
     return `https://tronscan.org/#/token20/${contractAddress}`;
+  }
+
+  // SPL mints live at solscan.io/token/<mint>.
+  if (isSolanaChainId(chainId)) {
+    const cluster =
+      chainId === SOLANA_DEVNET_CHAIN_ID ? "?cluster=devnet" : "";
+    return `https://solscan.io/token/${contractAddress}${cluster}`;
   }
 
   const base = getExplorerBaseUrl(chainId);
@@ -532,6 +552,12 @@ export function HomePage(props: HomePageProps) {
     useState<PortfolioStatus>("idle");
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [, setUpdatedAt] = useState<number | null>(null);
+  // Gateway resolver verdict per chain (chainId → includeInTotalBalance). It can
+  // only *tighten* the local mainnet allowlist (countsTowardTotalBalance), never
+  // loosen it, so an unreachable gateway falls back safely to the local guard.
+  const [inclusionOverrides, setInclusionOverrides] = useState<
+    Record<number, boolean>
+  >({});
 
   const mountedRef = useRef(false);
   const requestIdRef = useRef(0);
@@ -551,8 +577,14 @@ export function HomePage(props: HomePageProps) {
       ? nativeAmount * nativeQuote.priceUsd
       : null;
 
+  // USD→EUR rate from the native quote (both prices come from the gateway).
+  // EUR normally resolves; if it is ever missing the rate is null and the EUR
+  // toggle shows "—" rather than implying USD parity.
   const usdToEurRate =
-    nativeQuote && nativeQuote.priceUsd > 0
+    nativeQuote &&
+    nativeQuote.priceUsd > 0 &&
+    typeof nativeQuote.priceEur === "number" &&
+    Number.isFinite(nativeQuote.priceEur)
       ? nativeQuote.priceEur / nativeQuote.priceUsd
       : null;
 
@@ -725,6 +757,29 @@ export function HomePage(props: HomePageProps) {
       active = false;
     };
   }, [selectedChainId, nativeAsset?.symbol]);
+
+  // Defence-in-depth: ask the Simpl API resolver whether this chain's native
+  // asset may count toward the real portfolio total. The local mainnet
+  // allowlist already excludes every testnet; this only ever *removes* a chain
+  // the gateway flags as non-includable, and is a no-op when offline.
+  useEffect(() => {
+    let active = true;
+    void resolveAsset({ chainId: selectedChainId, address: null }).then(
+      (resolution) => {
+        if (!active || !resolution) return;
+        const include = resolution.includeInTotalBalance;
+        if (typeof include !== "boolean") return;
+        setInclusionOverrides((prev) =>
+          prev[selectedChainId] === include
+            ? prev
+            : { ...prev, [selectedChainId]: include },
+        );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [selectedChainId]);
 
   // Resolve ERC-20 spot prices for the visible tokens on this chain, by
   // chainId + contract address (not symbol). Seeds from cache for instant
@@ -1061,7 +1116,17 @@ export function HomePage(props: HomePageProps) {
   const defaultSendAsset =
     nativeAsset ?? visibleAssets.find((asset) => asset.type !== "native") ?? null;
 
+  // Only mainnet assets with real value count toward the total. Testnets/devnets
+  // (Sepolia, BTC Testnet, Solana Devnet) may show a reference price/chart but
+  // must NEVER inflate the portfolio total. The local mainnet allowlist is the
+  // authoritative guard; the gateway resolver can further exclude a chain.
+  function countsInTotal(chainId: number): boolean {
+    if (!countsTowardTotalBalance(chainId)) return false;
+    return inclusionOverrides[chainId] !== false;
+  }
+
   const totalKnownValueUsd = visibleAssets.reduce((sum, asset) => {
+    if (!countsInTotal(asset.chainId)) return sum;
     const value = getAssetUsdValue(asset, nativeAsset, nativeValueUsd, tokenPrices);
 
     return value === null ? sum : sum + value;
@@ -1069,6 +1134,7 @@ export function HomePage(props: HomePageProps) {
 
   const hasKnownValue = visibleAssets.some((asset) => {
     return (
+      countsInTotal(asset.chainId) &&
       getAssetUsdValue(asset, nativeAsset, nativeValueUsd, tokenPrices) !== null
     );
   });
@@ -1102,6 +1168,11 @@ export function HomePage(props: HomePageProps) {
   if (assetDetails) {
     const asset = assetDetails;
     const isNative = isNativeAsset(asset);
+    // Testnet/devnet native asset (BTC Testnet, Solana Devnet): price + chart
+    // are shown for reference only and must not imply real portfolio value.
+    // Testnets/devnets (Sepolia, BTC Testnet, Solana Devnet) show a reference
+    // price but never imply real value — matched to the total-balance rule.
+    const isReference = !countsTowardTotalBalance(asset.chainId);
 
     // Chart change %: compares first vs last point of the selected range.
     const chartFirst = chartPoints?.[0]?.price ?? null;
@@ -1252,7 +1323,9 @@ export function HomePage(props: HomePageProps) {
                 </span>
               </div>
               <div className="asset-details-stat">
-                <span className="asset-details-stat__label">Price</span>
+                <span className="asset-details-stat__label">
+                  {isReference ? "Reference price" : "Price"}
+                </span>
                 <span className="asset-details-stat__value">
                   {detailsPriceLoading
                     ? "Loading…"
@@ -1269,21 +1342,36 @@ export function HomePage(props: HomePageProps) {
               <div className="asset-details-stat">
                 <span className="asset-details-stat__label">Value</span>
                 <span className="asset-details-stat__value">
-                  {hideBalances
-                    ? "••••••"
-                    : formatValue(
-                        getAssetUsdValue(
-                          asset,
-                          nativeAsset,
-                          nativeValueUsd,
-                          tokenPrices,
-                        ),
-                        usdToEurRate,
-                        valuationCurrency,
-                      )}
+                  {hideBalances ? (
+                    "••••••"
+                  ) : isReference ? (
+                    // Never imply real funds for testnet/devnet balances.
+                    <span className="asset-details-stat__value--muted">
+                      Not real funds
+                    </span>
+                  ) : (
+                    formatValue(
+                      getAssetUsdValue(
+                        asset,
+                        nativeAsset,
+                        nativeValueUsd,
+                        tokenPrices,
+                      ),
+                      usdToEurRate,
+                      valuationCurrency,
+                    )
+                  )}
                 </span>
               </div>
             </section>
+
+            {isReference ? (
+              <div className="asset-reference-note">
+                {asset.symbol} on {getNetworkLabel(asset.chainId)} is a test
+                network asset with no real market value. The price and chart
+                below are shown for reference only.
+              </div>
+            ) : null}
 
             {/* Price chart — when history is available. Header carries the
                 selected-range change (left) and 24h volume (right). */}
@@ -1291,7 +1379,12 @@ export function HomePage(props: HomePageProps) {
               <section className="asset-chart-card">
                 <div className="asset-chart-head">
                   <div className="asset-chart-head__col">
-                    <span className="asset-chart-title">Price</span>
+                    <span className="asset-chart-title">
+                      Price
+                      {isReference ? (
+                        <span className="asset-chart-ref-pill">Reference</span>
+                      ) : null}
+                    </span>
                     {chartStatus === "ready" && chartChangePct !== null ? (
                       <span
                         className={`asset-chart-change asset-chart-change--${
@@ -1380,7 +1473,18 @@ export function HomePage(props: HomePageProps) {
                       "tronAddress" in props.selectedAccount
                       ? props.selectedAccount.tronAddress ?? null
                       : null
-                    : selectedAddress;
+                    : isBitcoinChainId(asset.chainId)
+                      ? props.selectedAccount &&
+                        "bitcoinAddresses" in props.selectedAccount
+                        ? props.selectedAccount.bitcoinAddresses?.[asset.chainId]
+                            ?.receive ?? null
+                        : null
+                      : isSolanaChainId(asset.chainId)
+                        ? props.selectedAccount &&
+                          "solanaAddress" in props.selectedAccount
+                          ? props.selectedAccount.solanaAddress ?? null
+                          : null
+                        : selectedAddress;
                   const url = nativeAddress
                     ? getExplorerAddressUrl(asset.chainId, nativeAddress)
                     : null;
@@ -1573,9 +1677,19 @@ export function HomePage(props: HomePageProps) {
 
         <span style={{ flex: 1 }} />
 
-        <button className="net-chip" type="button" onClick={() => setIsNetworkSelectorOpen(true)}>
+        <button
+          className="net-chip"
+          type="button"
+          onClick={() => setIsNetworkSelectorOpen(true)}
+          title={getNetworkLabel(props.walletState.selectedChainId)}
+          aria-label={`Network: ${getNetworkLabel(
+            props.walletState.selectedChainId,
+          )}. Change network.`}
+        >
           <NetworkIcon chainId={props.walletState.selectedChainId} size={18} />
-          {getNetworkLabel(props.walletState.selectedChainId)}
+          <span className="net-chip-label">
+            {getCompactNetworkName(props.walletState.selectedChainId)}
+          </span>
         </button>
 
         <button className="icbtn" type="button" onClick={props.onSettings}>
@@ -1665,7 +1779,11 @@ export function HomePage(props: HomePageProps) {
               gap: 8,
             }}
           >
-            <span>Couldn't refresh balances.</span>
+            <span>
+              {isSolanaChainId(selectedChainId)
+                ? "Solana RPC is unavailable. Try again later."
+                : "Couldn't refresh balances."}
+            </span>
             <button
               type="button"
               onClick={() => void syncPortfolio()}
@@ -1755,25 +1873,52 @@ export function HomePage(props: HomePageProps) {
                 </div>
 
                 <div className="num">
-                  <div className="v">
-                    {hideBalances ? "••••••" : formatValue(assetUsdValue, usdToEurRate, valuationCurrency)}
-                  </div>
-
-                  <div className="q">
-                    {assetUsdPrice !== null
-                      ? `${formatValue(
+                  {hideBalances ? (
+                    <div className="v">••••••</div>
+                  ) : !countsTowardTotalBalance(asset.chainId) ? (
+                    // Testnet/devnet: never imply real value. Show the reference
+                    // price (when loaded) under a clear "Reference" tag.
+                    assetUsdPrice !== null ? (
+                      <>
+                        <div className="v v--muted">Reference</div>
+                        <div className="q">
+                          {`${formatValue(
+                            assetUsdPrice,
+                            usdToEurRate,
+                            valuationCurrency,
+                          )}/${asset.symbol}`}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="q q--muted">Reference price</div>
+                    )
+                  ) : assetUsdPrice !== null ? (
+                    <>
+                      <div className="v">
+                        {formatValue(assetUsdValue, usdToEurRate, valuationCurrency)}
+                      </div>
+                      <div className="q">
+                        {`${formatValue(
                           assetUsdPrice,
                           usdToEurRate,
                           valuationCurrency,
-                        )}/${asset.symbol}`
-                      : "No price"}
-                  </div>
+                        )}/${asset.symbol}`}
+                      </div>
+                    </>
+                  ) : (
+                    // No fiat price (e.g. TRX): show a single intentional
+                    // "No price" instead of a lonely dash + label.
+                    <div className="q q--muted">No price</div>
+                  )}
                 </div>
               </button>
             );
           })}
 
-          {tokenAssets.length === 0 ? (
+          {tokenAssets.length === 0 &&
+          !isTronChainId(selectedChainId) &&
+          !isBitcoinChainId(selectedChainId) &&
+          !isSolanaChainId(selectedChainId) ? (
             <div
               style={{
                 margin: "8px",

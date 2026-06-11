@@ -3,21 +3,21 @@
 // Per-asset market data for the AssetDetails screen: spot price, 24h price
 // change and 24h (market) volume — all resolved through the SAME shared price
 // identity used by spot prices and the chart, so they can never disagree about
-// which CoinGecko asset they describe. This is intentionally separate from the
-// portfolio spot-price path (token-price / native-price services): it is only
-// consulted when an asset detail screen is open, and it never feeds wallet
-// balance/value math.
+// which asset they describe. This is intentionally separate from the portfolio
+// spot-price path (token-price / native-price services): it is only consulted
+// when an asset detail screen is open, and it never feeds wallet balance/value
+// math.
 //
-// The 24h volume returned by CoinGecko (`usd_24h_vol`) is the coin's global
-// market volume, not on-chain/DEX or wallet volume — the UI labels it simply
-// "24h volume". No data is fabricated: a field is omitted when the provider
-// doesn't return it.
+// Price/change/volume all come from the Simpl API Gateway (never a provider
+// directly); the `source` field on the response says which upstream answered.
+// No data is fabricated: a field is omitted when the gateway doesn't return it.
 
 import {
   priceDebug,
   priceWarn,
   resolvePriceIdentity,
 } from "./price-identity";
+import { getSpotPrice } from "./simpl-market-api.service";
 
 export type AssetMarketData = {
   priceUsd?: number;
@@ -78,34 +78,6 @@ function isFresh(data: AssetMarketData): boolean {
   return Date.now() - data.updatedAt < CACHE_TTL_MS;
 }
 
-type RawEntry = {
-  usd?: number;
-  usd_24h_change?: number;
-  usd_24h_vol?: number;
-};
-
-// Pull the optional fields out of a CoinGecko entry. Only finite numbers are
-// kept — anything missing is simply omitted (no zeros, no fakes).
-function toMarketData(entry: RawEntry | undefined, source: string): AssetMarketData {
-  const data: AssetMarketData = { source, updatedAt: Date.now() };
-  if (typeof entry?.usd === "number" && Number.isFinite(entry.usd)) {
-    data.priceUsd = entry.usd;
-  }
-  if (
-    typeof entry?.usd_24h_change === "number" &&
-    Number.isFinite(entry.usd_24h_change)
-  ) {
-    data.priceChange24hPct = entry.usd_24h_change;
-  }
-  if (
-    typeof entry?.usd_24h_vol === "number" &&
-    Number.isFinite(entry.usd_24h_vol)
-  ) {
-    data.volume24hUsd = entry.usd_24h_vol;
-  }
-  return data;
-}
-
 export class MarketDataService {
   // Synchronous cached read for instant first paint (may be stale).
   getCachedAssetMarketData(input: MarketDataInput): AssetMarketData | null {
@@ -130,57 +102,44 @@ export class MarketDataService {
       return cached;
     }
 
-    const url = new URL("https://api.coingecko.com/api/v3/simple/price");
-    let source: string;
-
-    if (identity.coinGeckoId) {
-      // Native / pegged / wrapped — resolve by coin id.
-      url.searchParams.set("ids", identity.coinGeckoId);
-      source = identity.coinGeckoId;
-    } else if (identity.address && identity.platform) {
-      // Plain ERC-20 — resolve by contract address.
-      url.pathname = `/api/v3/simple/token_price/${identity.platform}`;
-      url.searchParams.set("contract_addresses", identity.address);
-      source = "contract";
-    } else {
-      return cached;
-    }
-
-    url.searchParams.set("vs_currencies", "usd");
-    url.searchParams.set("include_24hr_change", "true");
-    url.searchParams.set("include_24hr_vol", "true");
-
     try {
-      const response = await fetch(url.toString(), {
-        method: "GET",
-        headers: { accept: "application/json" },
+      const spot = await getSpotPrice({
+        chainId: input.chainId,
+        address: input.address,
+        vs: "usd",
       });
 
-      if (!response.ok) {
-        priceWarn("market fetch failed", {
-          chainId: input.chainId,
-          address: input.address,
-          status: response.status,
-        });
+      if (!spot || typeof spot.price !== "number" || !Number.isFinite(spot.price)) {
+        // On a gateway failure / missing price, keep showing stale cache when
+        // we have it rather than flickering to "—".
         return cached;
       }
 
-      const json = (await response.json()) as Record<string, RawEntry>;
-      const entry = identity.coinGeckoId
-        ? json[identity.coinGeckoId]
-        : (json[identity.address ?? ""] ??
-          json[(identity.address ?? "").toLowerCase()]);
-
-      if (!entry || typeof entry.usd !== "number") {
-        return cached;
+      // Only finite numbers are kept — anything the gateway omits (e.g. volume)
+      // is simply left off, never zero-filled.
+      const data: AssetMarketData = {
+        priceUsd: spot.price,
+        source: spot.source,
+        updatedAt: Date.now(),
+      };
+      if (
+        typeof spot.change24h === "number" &&
+        Number.isFinite(spot.change24h)
+      ) {
+        data.priceChange24hPct = spot.change24h;
+      }
+      if (
+        typeof spot.volume24h === "number" &&
+        Number.isFinite(spot.volume24h)
+      ) {
+        data.volume24hUsd = spot.volume24h;
       }
 
-      const data = toMarketData(entry, source);
       writeCache(input.chainId, input.address, data);
       priceDebug("market ok", {
         chainId: input.chainId,
         address: input.address,
-        source,
+        source: data.source,
         hasVolume: data.volume24hUsd != null,
       });
       return data;

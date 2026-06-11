@@ -1,16 +1,20 @@
 import {
   canResolveChart,
-  getCoinGeckoPlatform,
   getPriceIdentityKey,
   priceDebug,
   priceWarn,
-  resolveCoinGeckoId,
 } from "./price-identity";
+import {
+  getPriceHistory,
+  type SimplHistoryRange,
+} from "./simpl-market-api.service";
 
 // Historical price points for the AssetDetailsPage chart. Uses the shared
 // price identity (chainId + native marker / contract address) so the chart
-// resolves to the exact same source as the spot price. Returns null when no
-// history is available so the chart can be hidden gracefully.
+// resolves to the exact same source as the spot price. Data comes from the
+// Simpl API Gateway's /v1/prices/history endpoint — never a provider directly.
+// Returns null when no history is available so the chart can be hidden
+// gracefully.
 
 export type PricePoint = {
   timestamp: number;
@@ -19,14 +23,15 @@ export type PricePoint = {
 
 export type PriceHistoryRange = "1D" | "7D" | "1M";
 
-// History changes slowly — a longer TTL also blunts CoinGecko rate-limiting
-// (429s) on repeat views.
+// History changes slowly — a longer TTL also blunts upstream rate-limiting
+// on repeat views.
 const CACHE_TTL_MS = 15 * 60_000; // 15 minutes
 
-function rangeToDays(range: PriceHistoryRange): number {
-  if (range === "1D") return 1;
-  if (range === "7D") return 7;
-  return 30;
+// Map the UI's range labels onto the gateway's supported ranges.
+function toBackendRange(range: PriceHistoryRange): SimplHistoryRange {
+  if (range === "1D") return "1d";
+  if (range === "7D") return "7d";
+  return "1m";
 }
 
 type HistoryInput = {
@@ -80,52 +85,27 @@ function writeCache(input: HistoryInput, points: PricePoint[]): void {
   }
 }
 
-function normalizePrices(raw: unknown): PricePoint[] | null {
-  if (
-    !raw ||
-    typeof raw !== "object" ||
-    !Array.isArray((raw as { prices?: unknown }).prices)
-  ) {
-    return null;
-  }
+// Convert the gateway's history points ({ t, price }) into the chart's
+// PricePoint shape. Needs at least two finite points to draw a line.
+function normalizePoints(
+  points: { t: number; price: number }[] | undefined,
+): PricePoint[] | null {
+  if (!Array.isArray(points)) return null;
 
-  const prices = (raw as { prices: unknown[] }).prices;
-  const points: PricePoint[] = [];
-
-  for (const entry of prices) {
+  const out: PricePoint[] = [];
+  for (const entry of points) {
     if (
-      Array.isArray(entry) &&
-      typeof entry[0] === "number" &&
-      typeof entry[1] === "number"
+      entry &&
+      typeof entry.t === "number" &&
+      Number.isFinite(entry.t) &&
+      typeof entry.price === "number" &&
+      Number.isFinite(entry.price)
     ) {
-      points.push({ timestamp: entry[0], price: entry[1] });
+      out.push({ timestamp: entry.t, price: entry.price });
     }
   }
 
-  return points.length >= 2 ? points : null;
-}
-
-// Resolve the CoinGecko market_chart URL using the shared price identity:
-// native / pegged / wrapped tokens resolve via coin id; other ERC-20s use the
-// platform + contract endpoint.
-function buildHistoryUrl(input: HistoryInput): URL | null {
-  const coinId = resolveCoinGeckoId(input.chainId, input.address);
-  if (coinId) {
-    return new URL(
-      `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
-    );
-  }
-
-  if (input.address) {
-    const platform = getCoinGeckoPlatform(input.chainId);
-    if (!platform) return null;
-    return new URL(
-      `https://api.coingecko.com/api/v3/coins/${platform}/contract/${input.address.toLowerCase()}/market_chart`,
-    );
-  }
-
-  // Native with no coin id (e.g. an unmapped chain).
-  return null;
+  return out.length >= 2 ? out : null;
 }
 
 export class PriceHistoryService {
@@ -152,30 +132,25 @@ export class PriceHistoryService {
       return fresh;
     }
 
-    const url = buildHistoryUrl(input);
-    if (!url) return null;
-
-    url.searchParams.set("vs_currency", "usd");
-    url.searchParams.set("days", String(rangeToDays(input.range)));
-
     try {
-      const response = await fetch(url.toString(), {
-        method: "GET",
-        headers: { accept: "application/json" },
+      const history = await getPriceHistory({
+        chainId: input.chainId,
+        address: input.address,
+        range: toBackendRange(input.range),
+        vs: "usd",
       });
 
-      if (!response.ok) {
+      if (!history) {
         priceWarn("history fetch failed", {
           chainId: input.chainId,
           address: input.address,
           range: input.range,
-          status: response.status,
         });
         // Survive rate-limiting / outages by reusing stale cache when present.
         return readStaleCache(input);
       }
 
-      const points = normalizePrices(await response.json());
+      const points = normalizePoints(history.points);
       if (!points) {
         priceDebug("history empty", {
           chainId: input.chainId,
@@ -191,6 +166,7 @@ export class PriceHistoryService {
         address: input.address,
         range: input.range,
         points: points.length,
+        source: history.source,
       });
       return points;
     } catch (error) {

@@ -1,10 +1,14 @@
 import { getNativeCoinId, priceDebug, priceWarn } from "./price-identity";
+import { getSpotPrice } from "./simpl-market-api.service";
 
 export type NativeAssetQuote = {
   chainId: number;
   symbol: string;
   priceUsd: number;
-  priceEur: number;
+  // EUR comes from the gateway (`vs=eur`) and is normally present. It stays
+  // optional so a transient EUR failure degrades to "no rate" instead of
+  // assuming USD parity — consumers must treat a missing EUR as "no EUR rate".
+  priceEur?: number;
   updatedAt: number;
 };
 
@@ -31,7 +35,6 @@ function readCachedQuote(chainId: number): NativeAssetQuote | null {
       parsed.chainId !== chainId ||
       typeof parsed.symbol !== "string" ||
       typeof parsed.priceUsd !== "number" ||
-      typeof parsed.priceEur !== "number" ||
       typeof parsed.updatedAt !== "number"
     ) {
       return null;
@@ -87,40 +90,20 @@ export class NativePriceService {
       return cached;
     }
 
-    const url = new URL("https://api.coingecko.com/api/v3/simple/price");
-
-    url.searchParams.set("ids", coinId);
-    url.searchParams.set("vs_currencies", "usd,eur");
-
+    // Price comes from the Simpl API Gateway (never a provider directly). USD is
+    // authoritative for value math; EUR (`vs=eur`) is fetched alongside it to
+    // derive the global USD→EUR rate used by the EUR valuation toggle. Both go
+    // through the gateway. The two calls are independent: a USD success with an
+    // EUR failure still yields a usable quote (EUR simply omitted → "—").
     try {
-      const response = await fetch(url.toString(), {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-        },
-      });
+      const [usd, eur] = await Promise.all([
+        getSpotPrice({ chainId: input.chainId, address: null, vs: "usd" }),
+        getSpotPrice({ chainId: input.chainId, address: null, vs: "eur" }),
+      ]);
 
-      if (!response.ok) {
-        priceWarn("native fetch failed", {
-          chainId: input.chainId,
-          coinId,
-          status: response.status,
-        });
-        return cached;
-      }
+      const priceUsd = usd?.price;
 
-      const data = (await response.json()) as Record<
-        string,
-        {
-          usd?: number;
-          eur?: number;
-        }
-      >;
-
-      const priceUsd = data[coinId]?.usd;
-      const priceEur = data[coinId]?.eur;
-
-      if (typeof priceUsd !== "number" || typeof priceEur !== "number") {
+      if (typeof priceUsd !== "number" || !Number.isFinite(priceUsd)) {
         return cached;
       }
 
@@ -128,15 +111,22 @@ export class NativePriceService {
         chainId: input.chainId,
         symbol: input.symbol,
         priceUsd,
-        priceEur,
         updatedAt: Date.now(),
       };
+
+      // Attach EUR when the gateway returned one (the normal case). On a rare
+      // EUR failure it is omitted and the EUR toggle shows "—" rather than a
+      // misleading USD-parity value.
+      if (typeof eur?.price === "number" && Number.isFinite(eur.price)) {
+        quote.priceEur = eur.price;
+      }
 
       writeCachedQuote(quote);
       priceDebug("native ok", {
         chainId: input.chainId,
         coinId,
         priceUsd,
+        source: usd?.source,
       });
 
       return quote;

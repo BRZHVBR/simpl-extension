@@ -1,20 +1,19 @@
-import {
-  getCoinGeckoPlatform,
-  priceDebug,
-  priceWarn,
-  resolveCoinGeckoId,
-} from "./price-identity";
+import { priceDebug, priceWarn } from "./price-identity";
+import { getBatchPrices } from "./simpl-market-api.service";
 
 // ERC-20 spot price resolution by stable identity (chainId + lowercase
 // contract address), NOT by symbol — symbols collide across chains (ETH/USDT/
-// USDC exist on many networks). Uses CoinGecko's token_price endpoint, which is
-// keyed by contract address, so pegged tokens (e.g. Binance-Peg ETH on BSC)
-// resolve to their underlying market price automatically. Coin-id aliases for
-// well-known pegged/wrapped tokens come from the shared price-identity layer.
+// USDC exist on many networks). Prices come from the Simpl API Gateway's batch
+// endpoint, which is keyed by chainId + contract address server-side, so pegged
+// tokens (e.g. Binance-Peg ETH on BSC) resolve to their underlying market price
+// without the client knowing any provider coin ids.
 
 export type TokenPrice = {
   priceUsd: number;
-  priceEur: number;
+  // EUR is not consumed for token display (the EUR valuation toggle derives a
+  // single global rate from the native quote), so it is optional and only the
+  // USD price is fetched per token. Kept for backward-compatible cache reads.
+  priceEur?: number;
   updatedAt: number;
 };
 
@@ -35,7 +34,6 @@ function readCachedPrice(chainId: number, address: string): TokenPrice | null {
     if (
       !parsed ||
       typeof parsed.priceUsd !== "number" ||
-      typeof parsed.priceEur !== "number" ||
       typeof parsed.updatedAt !== "number"
     ) {
       return null;
@@ -70,53 +68,6 @@ function isFresh(price: TokenPrice): boolean {
 
 type PriceMap = Record<string, TokenPrice>;
 
-async function fetchTokenPricesByAddress(
-  platform: string,
-  addresses: string[],
-): Promise<Record<string, { usd?: number; eur?: number }>> {
-  const url = new URL(
-    `https://api.coingecko.com/api/v3/simple/token_price/${platform}`,
-  );
-  url.searchParams.set("contract_addresses", addresses.join(","));
-  url.searchParams.set("vs_currencies", "usd,eur");
-
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: { accept: "application/json" },
-  });
-
-  if (!response.ok) {
-    throw new Error(`token_price ${response.status}`);
-  }
-
-  return (await response.json()) as Record<
-    string,
-    { usd?: number; eur?: number }
-  >;
-}
-
-async function fetchPricesByCoinIds(
-  coinIds: string[],
-): Promise<Record<string, { usd?: number; eur?: number }>> {
-  const url = new URL("https://api.coingecko.com/api/v3/simple/price");
-  url.searchParams.set("ids", coinIds.join(","));
-  url.searchParams.set("vs_currencies", "usd,eur");
-
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: { accept: "application/json" },
-  });
-
-  if (!response.ok) {
-    throw new Error(`simple/price ${response.status}`);
-  }
-
-  return (await response.json()) as Record<
-    string,
-    { usd?: number; eur?: number }
-  >;
-}
-
 export class TokenPriceService {
   // Synchronous cache read for instant first paint (may be stale).
   getCachedTokenPrices(chainId: number, addresses: string[]): PriceMap {
@@ -128,9 +79,10 @@ export class TokenPriceService {
     return out;
   }
 
-  // Resolve USD/EUR prices for a batch of ERC-20 addresses on one chain.
-  // Returns a map keyed by lowercase address. Missing/unknown tokens are simply
-  // absent from the map (callers fall back to "No price").
+  // Resolve USD prices for a batch of ERC-20 addresses on one chain. Returns a
+  // map keyed by lowercase address. Missing/unknown tokens are simply absent
+  // from the map (callers fall back to "No price"). A failed/partial batch
+  // serves any stale cache we still hold so the UI doesn't flicker to "—".
   async getTokenPrices(input: {
     chainId: number;
     addresses: string[];
@@ -158,67 +110,28 @@ export class TokenPriceService {
     if (stale.length === 0) return result;
 
     const now = Date.now();
-    const platform = getCoinGeckoPlatform(chainId);
     const stillMissing = new Set(stale);
 
-    // 2. Primary: CoinGecko token_price by contract address (covers pegged
-    //    tokens and stables automatically).
-    if (platform) {
-      try {
-        const data = await fetchTokenPricesByAddress(platform, stale);
-        for (const address of stale) {
-          const entry = data[address] ?? data[address.toLowerCase()];
-          if (
-            entry &&
-            typeof entry.usd === "number" &&
-            typeof entry.eur === "number"
-          ) {
-            const price: TokenPrice = {
-              priceUsd: entry.usd,
-              priceEur: entry.eur,
-              updatedAt: now,
-            };
-            result[address] = price;
-            writeCachedPrice(chainId, address, price);
-            stillMissing.delete(address);
-          }
-        }
-      } catch (error) {
-        priceWarn("token_price lookup failed", { chainId, error: String(error) });
-      }
-    }
+    // 2. One batch request to the Simpl API Gateway for every stale address.
+    try {
+      const batch = await getBatchPrices(
+        stale.map((address) => ({ chainId, address })),
+        "usd",
+      );
 
-    // 3. Fallback: known pegged/wrapped tokens resolved by coin id.
-    const aliasByAddress = new Map<string, string>();
-    for (const address of stillMissing) {
-      const coinId = resolveCoinGeckoId(chainId, address);
-      if (coinId) aliasByAddress.set(address, coinId);
-    }
-
-    if (aliasByAddress.size > 0) {
-      try {
-        const coinIds = Array.from(new Set(aliasByAddress.values()));
-        const data = await fetchPricesByCoinIds(coinIds);
-        for (const [address, coinId] of aliasByAddress) {
-          const entry = data[coinId];
-          if (
-            entry &&
-            typeof entry.usd === "number" &&
-            typeof entry.eur === "number"
-          ) {
-            const price: TokenPrice = {
-              priceUsd: entry.usd,
-              priceEur: entry.eur,
-              updatedAt: now,
-            };
-            result[address] = price;
-            writeCachedPrice(chainId, address, price);
-            stillMissing.delete(address);
-          }
+      for (const item of batch?.items ?? []) {
+        const address = item.address?.toLowerCase();
+        if (!address || !stillMissing.has(address)) continue;
+        if (typeof item.price !== "number" || !Number.isFinite(item.price)) {
+          continue;
         }
-      } catch (error) {
-        priceWarn("alias lookup failed", { chainId, error: String(error) });
+        const price: TokenPrice = { priceUsd: item.price, updatedAt: now };
+        result[address] = price;
+        writeCachedPrice(chainId, address, price);
+        stillMissing.delete(address);
       }
+    } catch (error) {
+      priceWarn("token batch failed", { chainId, error: String(error) });
     }
 
     if (stillMissing.size > 0) {
