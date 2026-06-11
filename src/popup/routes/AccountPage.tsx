@@ -1,10 +1,6 @@
 // src/popup/routes/AccountPage.tsx
 
 import { useEffect, useState } from "react";
-import {
-  SimpleInstrumentIcon,
-  type SimpleInstrument,
-} from "../components/SimpleInstrumentIcon";
 import { AccountBlockie } from "../components/AccountBlockie";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
@@ -35,9 +31,8 @@ async function copyToClipboard(value: string): Promise<void> {
 type AccountPageProps = {
   walletState: WalletState;
   onBack: () => void;
-  onChanged: () => void | Promise<void>;
-  onAddWatchWallet: () => void;
-  onImportWallet: () => void;
+  // Opens the full-screen Add account page (add / import / watch chooser).
+  onAddAccount: () => void;
   onOpenAccountDetails: (account: WalletAccount) => void;
 };
 
@@ -288,9 +283,9 @@ function AccountRow({
         <div className="acct-addr-list">
           {addresses.map((row) => (
             <AddressRow
-              key={row.family}
+              key={row.label}
               row={row}
-              copied={copiedKey === `${account.id}:${row.family}`}
+              copied={copiedKey === `${account.id}:${row.label}`}
               onCopy={(addressRow) => onCopy(account.id, addressRow)}
             />
           ))}
@@ -300,106 +295,12 @@ function AccountRow({
   );
 }
 
-function ActionCard({
-  instrument,
-  title,
-  subtitle,
-  onClick,
-  disabled,
-}: {
-  instrument: SimpleInstrument;
-  title: string;
-  subtitle: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="acct-action-card">
-      <button
-        className="row"
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        style={{
-          width: "100%",
-          border: 0,
-          textAlign: "left",
-          opacity: disabled ? 0.55 : 1,
-        }}
-      >
-        <SimpleInstrumentIcon instrument={instrument} />
-
-        <div className="body">
-          <div className="nm">{title}</div>
-          <div className="sub">{subtitle}</div>
-        </div>
-
-        <div className="num">
-          <span className="acct-chevron">
-            <ChevronIcon />
-          </span>
-        </div>
-      </button>
-    </div>
-  );
-}
-
-// The three add/import actions — shared between the bottom-of-list section and
-// the full-screen "+" options view so the wording stays in sync.
-function AddActions({
-  addingAccount,
-  busy,
-  onAddAccount,
-  onImportWallet,
-  onAddWatchWallet,
-}: {
-  addingAccount: boolean;
-  busy: boolean;
-  onAddAccount: () => void;
-  onImportWallet: () => void;
-  onAddWatchWallet: () => void;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <ActionCard
-        instrument="multiWallet"
-        title={addingAccount ? "Adding account…" : "Add account"}
-        subtitle="Create the next account from this wallet."
-        disabled={busy}
-        onClick={onAddAccount}
-      />
-
-      <ActionCard
-        instrument="security"
-        title="Import wallet"
-        subtitle="Use a seed phrase or private key."
-        disabled={busy}
-        onClick={onImportWallet}
-      />
-
-      <ActionCard
-        instrument="addressBook"
-        title="Add watch wallet"
-        subtitle="Track any address without private keys."
-        disabled={busy}
-        onClick={onAddWatchWallet}
-      />
-    </div>
-  );
-}
-
 export function AccountPage({
   walletState,
   onBack,
-  onChanged,
-  onAddWatchWallet,
-  onImportWallet,
+  onAddAccount,
   onOpenAccountDetails,
 }: AccountPageProps) {
-  const [addingAccount, setAddingAccount] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Full-screen add/import options, opened from the header "+".
-  const [showAddOptions, setShowAddOptions] = useState(false);
   // Public per-account addresses (EVM + optional TRON), resolved by the wallet
   // service independently of the selected network. Never holds key material.
   const [displayAddresses, setDisplayAddresses] = useState<DisplayAddressMap>(
@@ -451,7 +352,7 @@ export function AccountPage({
   ) {
     try {
       await copyToClipboard(row.address);
-      const key = `${accountId}:${row.family}`;
+      const key = `${accountId}:${row.label}`;
       setCopiedKey(key);
       window.setTimeout(() => {
         setCopiedKey((current) => (current === key ? null : current));
@@ -470,61 +371,6 @@ export function AccountPage({
   const watchAccounts = walletState.accounts.filter(
     (account) => account.type === "watch",
   );
-
-  const busy = addingAccount;
-
-  async function handleChanged() {
-    await onChanged();
-  }
-
-  async function addAccount() {
-    try {
-      setError(null);
-      setAddingAccount(true);
-
-      await walletService.addAccount();
-
-      await handleChanged();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setAddingAccount(false);
-    }
-  }
-
-  // ── Add account options (full screen, opened from header "+") ──
-  if (showAddOptions) {
-    return (
-      <div className="ext-popup acct-page" data-screen-label="Add account">
-        <div className="bar-top">
-          <button
-            className="icbtn"
-            type="button"
-            onClick={() => setShowAddOptions(false)}
-            aria-label="Back"
-          >
-            <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>
-          </button>
-          <span className="acct-title">Add account</span>
-          <span style={{ width: 32, flexShrink: 0 }} />
-        </div>
-
-        <div className="screen-body">
-          {error ? <div className="acct-error">{error}</div> : null}
-
-          <AddActions
-            addingAccount={addingAccount}
-            busy={busy}
-            onAddAccount={() => {
-              void addAccount().then(() => setShowAddOptions(false));
-            }}
-            onImportWallet={onImportWallet}
-            onAddWatchWallet={onAddWatchWallet}
-          />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="ext-popup acct-page" data-screen-label="06 Accounts">
@@ -551,10 +397,7 @@ export function AccountPage({
         <button
           className="icbtn"
           type="button"
-          onClick={() => {
-            setError(null);
-            setShowAddOptions(true);
-          }}
+          onClick={onAddAccount}
           aria-label="Add account"
         >
           <PlusIcon />
@@ -563,10 +406,6 @@ export function AccountPage({
 
       {/* ── Scrollable body ── */}
       <div className="screen-body">
-        {error ? (
-          <div className="acct-error">{error}</div>
-        ) : null}
-
         {/* ── Signer accounts ── */}
         <section className="acct-section">
           <div className="acct-section-label">Signer accounts</div>
@@ -577,7 +416,7 @@ export function AccountPage({
                 key={account.id}
                 account={account}
                 selected={account.id === walletState.selectedAccountId}
-                disabled={busy}
+                disabled={false}
                 addresses={addressesFor(account)}
                 copiedKey={copiedKey}
                 onCopy={handleCopyAddress}
@@ -602,7 +441,7 @@ export function AccountPage({
                   key={account.id}
                   account={account}
                   selected={account.id === walletState.selectedAccountId}
-                  disabled={busy}
+                  disabled={false}
                   addresses={addressesFor(account)}
                   copiedKey={copiedKey}
                   onCopy={handleCopyAddress}
@@ -613,17 +452,22 @@ export function AccountPage({
           </section>
         ) : null}
 
-        {/* ── Add / import ── */}
+        {/* ── Add accounts — compact discovery card (opens Add account page) ── */}
         <section className="acct-section">
-          <div className="acct-section-label">Add accounts</div>
+          <button
+            type="button"
+            className="acct-add-discover"
+            onClick={onAddAccount}
+          >
+            <div className="acct-add-discover__body">
+              <div className="acct-add-discover__title">Need another account?</div>
+              <div className="acct-add-discover__sub">
+                Add, import, or track a watch-only wallet.
+              </div>
+            </div>
 
-          <AddActions
-            addingAccount={addingAccount}
-            busy={busy}
-            onAddAccount={() => void addAccount()}
-            onImportWallet={onImportWallet}
-            onAddWatchWallet={onAddWatchWallet}
-          />
+            <span className="acct-add-discover__cta">Add account</span>
+          </button>
         </section>
       </div>
     </div>

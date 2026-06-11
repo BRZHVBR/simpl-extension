@@ -14,9 +14,10 @@ const ERC20_BALANCE_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
 ] as const;
 
-// "trc20" is the TRON token standard, routed through the TRON adapter. EVM
-// flows only ever produce "native" | "erc20".
-export type WalletAssetType = "native" | "erc20" | "trc20";
+// "trc20" is the TRON token standard, routed through the TRON adapter; "spl" is
+// the Solana token standard, routed through the Solana adapter. EVM flows only
+// ever produce "native" | "erc20".
+export type WalletAssetType = "native" | "erc20" | "trc20" | "spl";
 
 export type WalletAssetBalance = {
   id: string;

@@ -29,7 +29,47 @@ import { networkService } from "../networks/network.service";
 import {
   TRON_MAINNET_CHAIN_ID,
   isTronChainId,
+  isBitcoinChainId,
+  isSolanaChainId,
 } from "../networks/chain-registry";
+import {
+  getRequiredSolanaConfigByChainId,
+  getSolanaAddressExplorerUrl,
+  SOLANA_MAINNET,
+  type SolanaChainConfig,
+} from "../../chains/solana/solana.config";
+import { deriveSolanaAccountFromMnemonic } from "../../chains/solana/solana.derivation";
+import { lamportsToSol } from "../../chains/solana/solana.format";
+import {
+  getSolanaActivity,
+  getSolanaActivityStatus,
+  getSolanaNativeBalanceLamports,
+  getSolanaPortfolio,
+  sendSolanaAsset,
+} from "../../chains/solana/solana.adapter";
+import {
+  getRequiredBitcoinConfigByChainId,
+  getBitcoinAddressExplorerUrl,
+  BITCOIN_MAINNET,
+  BITCOIN_TESTNET,
+  type BitcoinChainConfig,
+} from "../../chains/bitcoin/bitcoin.config";
+import {
+  deriveBitcoinAccount,
+  deriveBitcoinKeyFromPrivateKey,
+} from "../../chains/bitcoin/bitcoin.derivation";
+import {
+  getBitcoinActivity,
+  getBitcoinActivityStatus,
+  getBitcoinNativeBalanceSats,
+  getBitcoinPortfolio,
+  sendBitcoinAsset,
+} from "../../chains/bitcoin/bitcoin.adapter";
+import { getBitcoinFeeQuotes } from "../../chains/bitcoin/bitcoin.fees";
+import { satsToBtc } from "../../chains/bitcoin/bitcoin.format";
+import type { BitcoinSigningKey } from "../../chains/bitcoin/bitcoin.transactions";
+import type { BitcoinAccountAddresses } from "../accounts/account.types";
+import type { TransactionHistoryItem } from "../transactions/transaction-history.service";
 import {
   deriveTronAccount,
   tronAddressFromPrivateKey,
@@ -752,6 +792,56 @@ export class WalletService {
       };
     }
 
+    if (isBitcoinChainId(walletState.selectedChainId)) {
+      const config = getRequiredBitcoinConfigByChainId(
+        walletState.selectedChainId,
+      );
+      const addresses = await this.ensureBitcoinAddressesForAccount(
+        walletState,
+        selectedAccount,
+        config,
+      );
+      const sats = await getBitcoinNativeBalanceSats(config, [
+        addresses.receive,
+        addresses.change,
+      ]);
+
+      return {
+        // Display-only field; Bitcoin uses the receive address here.
+        address: addresses.receive as EvmAddress,
+        chainId: config.chainId,
+        chainName: config.name,
+        symbol: config.symbol,
+        decimals: config.decimals,
+        balanceWei: sats.toString(),
+        formatted: satsToBtc(sats),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    if (isSolanaChainId(walletState.selectedChainId)) {
+      const config = getRequiredSolanaConfigByChainId(
+        walletState.selectedChainId,
+      );
+      const address = await this.ensureSolanaAddressForAccount(
+        walletState,
+        selectedAccount,
+      );
+      const lamports = await getSolanaNativeBalanceLamports(config, address);
+
+      return {
+        // Display-only field; Solana uses its base58 address here.
+        address: address as EvmAddress,
+        chainId: config.chainId,
+        chainName: config.name,
+        symbol: config.symbol,
+        decimals: config.decimals,
+        balanceWei: lamports.toString(),
+        formatted: lamportsToSol(lamports),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
     return balanceService.getNativeBalance(
       selectedAccount.address,
       walletState.selectedChainId,
@@ -774,6 +864,50 @@ export class WalletService {
         address: tronAddress as EvmAddress,
         chainId: TRON_MAINNET_CHAIN_ID,
         chainName: "TRON",
+        assets,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    if (isBitcoinChainId(walletState.selectedChainId)) {
+      const config = getRequiredBitcoinConfigByChainId(
+        walletState.selectedChainId,
+      );
+      const addresses = await this.ensureBitcoinAddressesForAccount(
+        walletState,
+        selectedAccount,
+        config,
+      );
+      const assets = await getBitcoinPortfolio(config, [
+        addresses.receive,
+        addresses.change,
+      ]);
+
+      return {
+        // Display-only field; Bitcoin uses the receive address here.
+        address: addresses.receive as EvmAddress,
+        chainId: config.chainId,
+        chainName: config.name,
+        assets,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    if (isSolanaChainId(walletState.selectedChainId)) {
+      const config = getRequiredSolanaConfigByChainId(
+        walletState.selectedChainId,
+      );
+      const address = await this.ensureSolanaAddressForAccount(
+        walletState,
+        selectedAccount,
+      );
+      const assets = await getSolanaPortfolio(config, address);
+
+      return {
+        // Display-only field; Solana uses its base58 address here.
+        address: address as EvmAddress,
+        chainId: config.chainId,
+        chainName: config.name,
         assets,
         updatedAt: new Date().toISOString(),
       };
@@ -840,6 +974,14 @@ export class WalletService {
         toAddress: input.toAddress,
         amount: input.amount,
       });
+    }
+
+    if (isBitcoinChainId(walletState.selectedChainId)) {
+      return this.sendSelectedBitcoinAsset(walletState, selectedAccount, input);
+    }
+
+    if (isSolanaChainId(walletState.selectedChainId)) {
+      return this.sendSelectedSolanaAsset(walletState, selectedAccount, input);
     }
 
     const privateKey = await this.getPrivateKeyForAccount(
@@ -986,6 +1128,22 @@ export class WalletService {
       );
     }
 
+    if (isBitcoinChainId(walletState.selectedChainId)) {
+      return this.waitForBitcoinTransaction(
+        getRequiredBitcoinConfigByChainId(walletState.selectedChainId),
+        input.hash,
+        input.timeoutMs ?? 180_000,
+      );
+    }
+
+    if (isSolanaChainId(walletState.selectedChainId)) {
+      return this.waitForSolanaTransaction(
+        getRequiredSolanaConfigByChainId(walletState.selectedChainId),
+        input.hash,
+        input.timeoutMs ?? 180_000,
+      );
+    }
+
     const chain = networkService.getRequiredChainById(walletState.selectedChainId);
     const provider = new JsonRpcProvider(chain.rpcUrl);
 
@@ -1009,6 +1167,20 @@ export class WalletService {
 
     if (isTronChainId(walletState.selectedChainId)) {
       return getTronActivityStatus(input.hash);
+    }
+
+    if (isBitcoinChainId(walletState.selectedChainId)) {
+      return getBitcoinActivityStatus(
+        getRequiredBitcoinConfigByChainId(walletState.selectedChainId),
+        input.hash,
+      );
+    }
+
+    if (isSolanaChainId(walletState.selectedChainId)) {
+      return getSolanaActivityStatus(
+        getRequiredSolanaConfigByChainId(walletState.selectedChainId),
+        input.hash,
+      );
     }
 
     const chain = networkService.getRequiredChainById(walletState.selectedChainId);
@@ -1587,6 +1759,519 @@ export class WalletService {
     throw new Error("Transaction confirmation timed out.");
   }
 
+  // --- Bitcoin (UTXO) ------------------------------------------------------
+
+  // Resolve the selected account's Bitcoin receive + change addresses for the
+  // given network. Returns the persisted pair when present (no vault needed);
+  // otherwise derives them from the vault and persists them on the account
+  // (lazy migration), mirroring the TRON path. Requires the wallet to be
+  // unlocked or a password. Watch-only accounts have no derivable BTC address.
+  private async ensureBitcoinAddressesForAccount(
+    walletState: WalletState,
+    account: WalletAccount,
+    config: BitcoinChainConfig,
+    password?: string,
+  ): Promise<BitcoinAccountAddresses> {
+    if (
+      (account.type === "mnemonic" || account.type === "importedMnemonic") &&
+      account.bitcoinAddresses?.[config.chainId]
+    ) {
+      return account.bitcoinAddresses[config.chainId];
+    }
+
+    if (account.type === "watch") {
+      throw new Error("Watch-only accounts do not support Bitcoin.");
+    }
+
+    const payload =
+      await this.getDecryptedPayloadForSensitiveOperation(password);
+    const material = this.deriveBitcoinMaterialForAccount(
+      account,
+      config,
+      payload,
+    );
+
+    const addresses: BitcoinAccountAddresses = {
+      receive: material.receive.address,
+      change: material.change.address,
+    };
+
+    if (account.type === "mnemonic" || account.type === "importedMnemonic") {
+      await this.persistBitcoinAddresses(
+        walletState,
+        account.id,
+        config.chainId,
+        addresses,
+      );
+    }
+
+    return addresses;
+  }
+
+  // Derive the Bitcoin receive + change addresses and their signing keys for an
+  // account from decrypted vault material. Mnemonic-derived accounts use BIP-84
+  // (m/84'/coin'/index'/{0|1}/0); private-key imports have no HD tree, so a
+  // single P2WPKH key backs both the receive and change slots.
+  //
+  // SECURITY: returns Uint8Array private keys held transiently inside this
+  // method's caller chain only — never logged, never persisted, never returned
+  // to the UI.
+  private deriveBitcoinMaterialForAccount(
+    account: WalletAccount,
+    config: BitcoinChainConfig,
+    payload: VaultPayload,
+  ): {
+    receive: { address: string; privateKey: Uint8Array };
+    change: { address: string; privateKey: Uint8Array };
+  } {
+    if (account.type === "mnemonic") {
+      const derived = deriveBitcoinAccount(
+        payload.mnemonic,
+        config,
+        account.index,
+      );
+      return {
+        receive: {
+          address: derived.receive.address,
+          privateKey: derived.receive.privateKey,
+        },
+        change: {
+          address: derived.change.address,
+          privateKey: derived.change.privateKey,
+        },
+      };
+    }
+
+    if (account.type === "importedMnemonic" || account.type === "privateKey") {
+      const secret = (payload.importedAccounts ?? []).find(
+        (item) => item.id === account.id,
+      );
+
+      if (!secret) {
+        throw new Error(
+          "Key material for this imported account is missing. Re-import the account.",
+        );
+      }
+
+      if (secret.type === "importedMnemonic") {
+        const derived = deriveBitcoinAccount(
+          secret.mnemonic,
+          config,
+          secret.index,
+        );
+        return {
+          receive: {
+            address: derived.receive.address,
+            privateKey: derived.receive.privateKey,
+          },
+          change: {
+            address: derived.change.address,
+            privateKey: derived.change.privateKey,
+          },
+        };
+      }
+
+      // Single imported raw key: one P2WPKH address for both receive + change.
+      const single = deriveBitcoinKeyFromPrivateKey(secret.privateKey, config);
+      return {
+        receive: { address: single.address, privateKey: single.privateKey },
+        change: { address: single.address, privateKey: single.privateKey },
+      };
+    }
+
+    throw new Error("Watch-only accounts do not support Bitcoin.");
+  }
+
+  // Orchestrate a Bitcoin send: derive signing material, then hand off to the
+  // adapter which loads UTXOs, selects coins, builds + signs the PSBT and
+  // broadcasts. The fee rate comes from the send form (sat/vB); when omitted we
+  // fall back to a "normal" provider/fallback quote.
+  private async sendSelectedBitcoinAsset(
+    walletState: WalletState,
+    account: WalletAccount,
+    input: SendSelectedAssetInput,
+  ): Promise<SendSelectedAssetResult> {
+    const config = getRequiredBitcoinConfigByChainId(
+      walletState.selectedChainId,
+    );
+
+    const payload = await this.getDecryptedPayloadForSensitiveOperation(
+      input.password,
+    );
+    const material = this.deriveBitcoinMaterialForAccount(
+      account,
+      config,
+      payload,
+    );
+
+    const feeRateSatPerVb =
+      input.feeRateSatPerVb ??
+      (await getBitcoinFeeQuotes(config)).normal.satPerVb;
+
+    // De-duplicate addresses/keys (privateKey imports use one address for both).
+    const ownedAddresses = Array.from(
+      new Set([material.receive.address, material.change.address]),
+    );
+    const signingKeys: BitcoinSigningKey[] = [
+      { address: material.receive.address, privateKey: material.receive.privateKey },
+    ];
+    if (material.change.address !== material.receive.address) {
+      signingKeys.push({
+        address: material.change.address,
+        privateKey: material.change.privateKey,
+      });
+    }
+
+    return sendBitcoinAsset({
+      config,
+      amount: input.amount,
+      recipient: input.toAddress,
+      feeRateSatPerVb,
+      ownedAddresses,
+      changeAddress: material.change.address,
+      signingKeys,
+    });
+  }
+
+  // Live Bitcoin activity for the selected account, mapped onto the wallet's
+  // shared history-item shape so the Activity screen can render it like EVM/TRON
+  // entries. Returns [] for non-BTC chains or when the BTC addresses can't be
+  // resolved (e.g. locked + not yet persisted) — the caller still shows any
+  // locally recorded sends.
+  async getSelectedBitcoinActivity(): Promise<TransactionHistoryItem[]> {
+    const walletState = await this.storage.getWalletState();
+
+    if (!isBitcoinChainId(walletState.selectedChainId)) {
+      return [];
+    }
+
+    const account = this.getRequiredSelectedAccount(walletState);
+    const config = getRequiredBitcoinConfigByChainId(
+      walletState.selectedChainId,
+    );
+
+    let addresses: BitcoinAccountAddresses;
+    try {
+      addresses = await this.ensureBitcoinAddressesForAccount(
+        walletState,
+        account,
+        config,
+      );
+    } catch {
+      return [];
+    }
+
+    const activity = await getBitcoinActivity(config, [
+      addresses.receive,
+      addresses.change,
+    ]);
+
+    return activity.map((item) => {
+      const createdAt = item.blockTime
+        ? new Date(item.blockTime * 1000).toISOString()
+        : new Date().toISOString();
+
+      return {
+        id: `${config.chainId}:${item.txid.toLowerCase()}`,
+        hash: item.txid,
+        chainId: config.chainId,
+        chainName: config.name,
+        direction: item.direction === "incoming" ? "receive" : "send",
+        status: item.confirmed ? "confirmed" : "submitted",
+        assetType: "native",
+        assetSymbol: config.symbol,
+        assetName: config.name,
+        contractAddress: null,
+        amount: satsToBtc(item.amountSats),
+        // Both endpoints are the wallet's own receive address for filtering
+        // purposes; the row renders by direction + amount, not address.
+        fromAddress: addresses.receive,
+        toAddress: addresses.receive,
+        explorerUrl: item.explorerUrl,
+        createdAt,
+        updatedAt: createdAt,
+      };
+    });
+  }
+
+  private async persistBitcoinAddresses(
+    walletState: WalletState,
+    accountId: WalletAccountId,
+    chainId: number,
+    addresses: BitcoinAccountAddresses,
+  ): Promise<void> {
+    const accounts = walletState.accounts.map((account) => {
+      if (account.id !== accountId) {
+        return account;
+      }
+
+      if (account.type === "mnemonic" || account.type === "importedMnemonic") {
+        return {
+          ...account,
+          bitcoinAddresses: {
+            ...account.bitcoinAddresses,
+            [chainId]: addresses,
+          },
+        };
+      }
+
+      return account;
+    });
+
+    await this.storage.saveWalletState({ ...walletState, accounts });
+  }
+
+  private async waitForBitcoinTransaction(
+    config: BitcoinChainConfig,
+    txid: string,
+    timeoutMs: number,
+  ): Promise<"confirmed" | "failed"> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const status = await getBitcoinActivityStatus(config, txid);
+
+      if (status === "confirmed") return "confirmed";
+      if (status === "failed") return "failed";
+
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+
+    throw new Error("Transaction confirmation timed out.");
+  }
+
+  // --- Solana (Ed25519) ----------------------------------------------------
+
+  // Resolve the selected account's Solana base58 address. Returns the persisted
+  // value when present (no vault needed); otherwise derives it from the vault
+  // and persists it on the account (lazy migration, mirroring the TRON path).
+  // Requires the wallet to be unlocked or a password. Watch-only and private-key
+  // imports have no Ed25519 Solana key.
+  private async ensureSolanaAddressForAccount(
+    walletState: WalletState,
+    account: WalletAccount,
+    password?: string,
+  ): Promise<string> {
+    if (
+      (account.type === "mnemonic" || account.type === "importedMnemonic") &&
+      account.solanaAddress
+    ) {
+      return account.solanaAddress;
+    }
+
+    if (account.type === "watch") {
+      throw new Error("Watch-only accounts do not support Solana.");
+    }
+
+    if (account.type === "privateKey") {
+      throw new Error(
+        "Private-key imports do not support Solana (Solana uses Ed25519, not the imported secp256k1 key).",
+      );
+    }
+
+    const payload =
+      await this.getDecryptedPayloadForSensitiveOperation(password);
+    const { address } = this.deriveSolanaMaterialForAccount(account, payload);
+
+    await this.persistSolanaAddress(walletState, account.id, address);
+
+    return address;
+  }
+
+  // Derive the Solana address + signing material for an account from decrypted
+  // vault material. Only mnemonic-derivable accounts are supported: primary-seed
+  // accounts use m/44'/501'/index'/0'; imported recovery phrases use the same
+  // path on their own seed. Private-key imports (secp256k1) and watch-only
+  // accounts have no Ed25519 Solana key.
+  //
+  // SECURITY: returns a Uint8Array secret key held transiently inside this
+  // method's caller chain only — never logged, never persisted, never returned
+  // to the UI.
+  private deriveSolanaMaterialForAccount(
+    account: WalletAccount,
+    payload: VaultPayload,
+  ): { address: string; secretKey: Uint8Array } {
+    if (account.type === "mnemonic") {
+      const derived = deriveSolanaAccountFromMnemonic(
+        payload.mnemonic,
+        account.index,
+      );
+      return { address: derived.address, secretKey: derived.secretKey };
+    }
+
+    if (account.type === "importedMnemonic") {
+      const secret = (payload.importedAccounts ?? []).find(
+        (item) => item.id === account.id,
+      );
+
+      if (!secret) {
+        throw new Error(
+          "Key material for this imported account is missing. Re-import the account.",
+        );
+      }
+
+      if (secret.type === "importedMnemonic") {
+        const derived = deriveSolanaAccountFromMnemonic(
+          secret.mnemonic,
+          secret.index,
+        );
+        return { address: derived.address, secretKey: derived.secretKey };
+      }
+    }
+
+    throw new Error(
+      "This account type does not support Solana. Use a recovery-phrase account.",
+    );
+  }
+
+  // Orchestrate a Solana send: derive signing material, then hand off to the
+  // adapter which validates, balance-checks, builds + signs the transfer and
+  // broadcasts. SPL token sends are gated in the adapter with a coded error.
+  private async sendSelectedSolanaAsset(
+    walletState: WalletState,
+    account: WalletAccount,
+    input: SendSelectedAssetInput,
+  ): Promise<SendSelectedAssetResult> {
+    const config = getRequiredSolanaConfigByChainId(
+      walletState.selectedChainId,
+    );
+
+    const payload = await this.getDecryptedPayloadForSensitiveOperation(
+      input.password,
+    );
+    const material = this.deriveSolanaMaterialForAccount(account, payload);
+
+    return sendSolanaAsset({
+      config,
+      asset: input.asset,
+      amount: input.amount,
+      recipient: input.toAddress,
+      fromSecretKey: material.secretKey,
+    });
+  }
+
+  private async persistSolanaAddress(
+    walletState: WalletState,
+    accountId: WalletAccountId,
+    solanaAddress: string,
+  ): Promise<void> {
+    const accounts = walletState.accounts.map((account) => {
+      if (account.id !== accountId) {
+        return account;
+      }
+
+      if (account.type === "mnemonic" || account.type === "importedMnemonic") {
+        return { ...account, solanaAddress };
+      }
+
+      return account;
+    });
+
+    await this.storage.saveWalletState({ ...walletState, accounts });
+  }
+
+  private async waitForSolanaTransaction(
+    config: SolanaChainConfig,
+    signature: string,
+    timeoutMs: number,
+  ): Promise<"confirmed" | "failed"> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const status = await getSolanaActivityStatus(config, signature);
+
+      if (status === "confirmed") return "confirmed";
+      if (status === "failed") return "failed";
+
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
+
+    throw new Error("Transaction confirmation timed out.");
+  }
+
+  // Live Solana activity for the selected account, mapped onto the wallet's
+  // shared history-item shape so the Activity screen renders it like EVM/TRON/BTC
+  // entries. Returns [] for non-Solana chains or when the Solana address can't
+  // be resolved (e.g. locked + not yet persisted) — the caller still shows any
+  // locally recorded sends.
+  async getSelectedSolanaActivity(): Promise<TransactionHistoryItem[]> {
+    const walletState = await this.storage.getWalletState();
+
+    if (!isSolanaChainId(walletState.selectedChainId)) {
+      return [];
+    }
+
+    const account = this.getRequiredSelectedAccount(walletState);
+    const config = getRequiredSolanaConfigByChainId(
+      walletState.selectedChainId,
+    );
+
+    let address: string;
+    try {
+      address = await this.ensureSolanaAddressForAccount(walletState, account);
+    } catch {
+      return [];
+    }
+
+    const activity = await getSolanaActivity(config, address);
+
+    return activity.map((item) => {
+      const createdAt = item.blockTime
+        ? new Date(item.blockTime * 1000).toISOString()
+        : new Date().toISOString();
+
+      return {
+        id: `${config.chainId}:${item.signature.toLowerCase()}`,
+        hash: item.signature,
+        chainId: config.chainId,
+        chainName: config.name,
+        direction: item.direction === "incoming" ? "receive" : "send",
+        status: item.confirmed ? "confirmed" : "submitted",
+        assetType: "native",
+        assetSymbol: config.symbol,
+        assetName: config.name,
+        contractAddress: null,
+        amount: lamportsToSol(item.amountLamports),
+        // Both endpoints are the wallet's own address for filtering purposes;
+        // the row renders by direction + amount, not address.
+        fromAddress: address,
+        toAddress: address,
+        explorerUrl: item.explorerUrl,
+        createdAt,
+        updatedAt: createdAt,
+      };
+    });
+  }
+
+  // Resolve a Solana address for display: the persisted value if present, else
+  // derive from the vault when unlocked. Watch-only / private-key → none.
+  // Display-only: derived key material is discarded here and never persisted.
+  private resolveSolanaDisplayAddress(
+    account: WalletAccount,
+    payload: VaultPayload | null,
+  ): string | null {
+    if (account.type === "watch" || account.type === "privateKey") {
+      return null;
+    }
+
+    if (
+      (account.type === "mnemonic" || account.type === "importedMnemonic") &&
+      account.solanaAddress
+    ) {
+      return account.solanaAddress;
+    }
+
+    if (!payload) {
+      return null;
+    }
+
+    try {
+      return this.deriveSolanaMaterialForAccount(account, payload).address;
+    } catch {
+      return null;
+    }
+  }
+
   // Receive address for the selected account on the selected network: the EVM
   // address for EVM chains, the (lazily derived) TRON address for TRON.
   async getSelectedReceiveAddress(): Promise<string> {
@@ -1595,6 +2280,23 @@ export class WalletService {
 
     if (isTronChainId(walletState.selectedChainId)) {
       return this.ensureTronAddressForAccount(walletState, account);
+    }
+
+    if (isBitcoinChainId(walletState.selectedChainId)) {
+      const config = getRequiredBitcoinConfigByChainId(
+        walletState.selectedChainId,
+      );
+      const addresses = await this.ensureBitcoinAddressesForAccount(
+        walletState,
+        account,
+        config,
+      );
+      // Receive screen shows only the external receive address.
+      return addresses.receive;
+    }
+
+    if (isSolanaChainId(walletState.selectedChainId)) {
+      return this.ensureSolanaAddressForAccount(walletState, account);
     }
 
     return account.address;
@@ -1757,6 +2459,54 @@ export class WalletService {
         });
       }
 
+      // Bitcoin: show the receive address for both networks (BTC + tBTC). These
+      // are public, deterministic BIP-84 addresses resolved from persisted state
+      // or derived for display only — no key material is exposed or persisted
+      // here. A failed/locked derivation simply omits the row.
+      for (const config of [BITCOIN_MAINNET, BITCOIN_TESTNET]) {
+        const bitcoinAddress = this.resolveBitcoinDisplayAddress(
+          account,
+          payload,
+          config,
+        );
+
+        if (bitcoinAddress) {
+          rows.push({
+            family: "bitcoin",
+            label: config.isTestnet ? "tBTC" : "BTC",
+            address: bitcoinAddress,
+            explorerUrl: getBitcoinAddressExplorerUrl(config, bitcoinAddress),
+          });
+        }
+      }
+
+      // Solana: a single base58 address (same on every cluster). Resolved from
+      // persisted state or derived for display only — no key material exposed.
+      const solanaAddress = this.resolveSolanaDisplayAddress(account, payload);
+
+      if (solanaAddress) {
+        if (
+          (account.type === "mnemonic" ||
+            account.type === "importedMnemonic") &&
+          account.solanaAddress !== solanaAddress
+        ) {
+          nextAccounts = nextAccounts.map((item) =>
+            item.id === account.id &&
+            (item.type === "mnemonic" || item.type === "importedMnemonic")
+              ? { ...item, solanaAddress }
+              : item,
+          );
+          mutated = true;
+        }
+
+        rows.push({
+          family: "solana",
+          label: "Solana",
+          address: solanaAddress,
+          explorerUrl: getSolanaAddressExplorerUrl(SOLANA_MAINNET, solanaAddress),
+        });
+      }
+
       result[account.id] = rows;
     }
 
@@ -1793,6 +2543,38 @@ export class WalletService {
 
     try {
       return this.deriveTronMaterialForAccount(account, payload).address;
+    } catch {
+      return null;
+    }
+  }
+
+  // Resolve a Bitcoin receive address for display on the given network: the
+  // persisted value if present, else derive from the vault when unlocked.
+  // Watch-only → none. Display-only: derived key material is discarded here and
+  // never logged or persisted.
+  private resolveBitcoinDisplayAddress(
+    account: WalletAccount,
+    payload: VaultPayload | null,
+    config: BitcoinChainConfig,
+  ): string | null {
+    if (account.type === "watch") {
+      return null;
+    }
+
+    if (
+      (account.type === "mnemonic" || account.type === "importedMnemonic") &&
+      account.bitcoinAddresses?.[config.chainId]
+    ) {
+      return account.bitcoinAddresses[config.chainId].receive;
+    }
+
+    if (!payload) {
+      return null;
+    }
+
+    try {
+      return this.deriveBitcoinMaterialForAccount(account, config, payload)
+        .receive.address;
     } catch {
       return null;
     }

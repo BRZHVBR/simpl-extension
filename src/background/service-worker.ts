@@ -1,5 +1,8 @@
 /// <reference types="chrome" />
 
+// Must be first: installs the Buffer/global polyfills @solana/web3.js needs at
+// runtime, before any Solana code (reached via walletService) is evaluated.
+import "../polyfills/buffer";
 import { walletService } from "../core/wallet/wallet.service";
 import { getChainById, TRON_MAINNET_CHAIN_ID } from "../core/networks/chain-registry";
 

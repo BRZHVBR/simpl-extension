@@ -147,6 +147,13 @@
   color: #c20023;
 }
 
+/* Bitcoin (BTC + tBTC) badge: subtle orange brand tint. */
+.acct-addr-badge--bitcoin {
+  background: rgba(247, 147, 26, 0.1);
+  border-color: rgba(247, 147, 26, 0.28);
+  color: #b5710d;
+}
+
 .acct-addr-text {
   flex: 0 1 auto;
   min-width: 0;
@@ -367,6 +374,75 @@
   padding: 10px 12px !important;
   cursor: pointer !important;
   background: transparent !important;
+}
+
+/* ============================================================
+   ADD ACCOUNT — compact discovery card (opens the add sheet)
+   ============================================================ */
+
+/* Calm, secondary affordance — quieter than account cards (dashed, no fill)
+   so the account list stays the focus. The whole card is the button. */
+.acct-add-discover {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-strong, #d4d4d4);
+  border-radius: 16px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.acct-add-discover:hover {
+  border-color: var(--ink-4, #b4b4b0);
+  background: rgba(17, 17, 17, 0.02);
+}
+
+.acct-add-discover:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.acct-add-discover__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.acct-add-discover__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-1);
+}
+
+.acct-add-discover__sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-add-discover__cta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, #d4d4d4);
+  background: var(--bg-surface, #ffffff);
+  color: var(--ink-1, #111111);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.acct-add-discover:hover .acct-add-discover__cta {
+  border-color: var(--ink-4, #b4b4b0);
 }
 
 /* ============================================================

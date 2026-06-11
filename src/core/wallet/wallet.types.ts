@@ -123,7 +123,7 @@ export type ExportAccountKeysResult = {
 
 // A public address row for an account, shown on the Accounts screen
 // independently of the selected network. Never carries private key material.
-export type AccountAddressFamily = "evm" | "tron";
+export type AccountAddressFamily = "evm" | "tron" | "bitcoin" | "solana";
 
 export type AccountDisplayAddress = {
   family: AccountAddressFamily;
@@ -144,6 +144,9 @@ export type SendSelectedAssetInput = {
   toAddress: string;
   amount: string;
   password?: string;
+  // Bitcoin only: the chosen fee rate (sat/vB) from the send form's preset. The
+  // service falls back to a "normal" quote when omitted. Ignored by EVM/TRON.
+  feeRateSatPerVb?: number;
 };
 
 export type SendSelectedAssetResult = {

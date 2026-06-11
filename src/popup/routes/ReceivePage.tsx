@@ -12,9 +12,12 @@ import {
   getNetworkDisplayName,
   getNetworkStandardLabel,
   isTronChainId,
+  isBitcoinChainId,
+  isSolanaChainId,
 } from "../../core/networks/chain-registry";
 import { walletService } from "../../core/wallet/wallet.service";
 import { AssetIcon } from "../components/AssetIcon";
+import { QrCode } from "../components/QrCode";
 import { NetworkIcon } from "../components/NetworkIcon";
 import { AccountSelectSheet } from "../components/AccountSelectSheet";
 import {
@@ -192,6 +195,12 @@ export function ReceivePage({
   const networkLabel = getNetworkLabel(chainId);
   const nativeSymbol = getNativeSymbol(chainId);
   const isTron = isTronChainId(chainId);
+  const isBitcoin = isBitcoinChainId(chainId);
+  const isSolana = isSolanaChainId(chainId);
+  // TRON + Bitcoin + Solana resolve their receive address lazily through the
+  // service (base58 TRON address / BIP-84 BTC receive address / base58 Solana
+  // address) instead of the stored EVM address.
+  const usesDerivedAddress = isTron || isBitcoin || isSolana;
 
   // The address to display/copy for the selected network. For EVM this is the
   // account's stored address; for TRON it is the (lazily derived) base58 TRON
@@ -209,7 +218,7 @@ export function ReceivePage({
       return;
     }
 
-    if (!isTron) {
+    if (!usesDerivedAddress) {
       setReceiveAddress(selectedAccount.address);
       setAddressError(null);
       return;
@@ -225,17 +234,18 @@ export function ReceivePage({
       .catch((error) => {
         if (!active) return;
         setReceiveAddress("");
+        const family = isBitcoin ? "Bitcoin" : isSolana ? "Solana" : "TRON";
         setAddressError(
           error instanceof Error
             ? error.message
-            : "TRON address is unavailable for this account.",
+            : `${family} address is unavailable for this account.`,
         );
       });
 
     return () => {
       active = false;
     };
-  }, [chainId, isTron, selectedAccount?.id, selectedAccount?.address]);
+  }, [chainId, usesDerivedAddress, isBitcoin, isSolana, selectedAccount?.id, selectedAccount?.address]);
 
   // Use the passed receive asset only while it belongs to the selected chain;
   // switching the network in-page falls back to that chain's native asset.
@@ -464,12 +474,26 @@ export function ReceivePage({
 
         {/* Safety notice — tokens also call out the chain's token standard.
             TRON gets an explicit cross-network loss warning. */}
-        {isTron ? (
+        {isBitcoin ? (
+          <Notice
+            title="Bitcoin network only"
+            note="Sending other assets to this address may result in permanent loss."
+          >
+            {`Only send BTC on the ${networkLabel} network to this address.`}
+          </Notice>
+        ) : isTron ? (
           <Notice
             title="TRON network only"
             note="Sending assets from another network may result in permanent loss."
           >
             Only send TRX or TRC-20 tokens on TRON to this address.
+          </Notice>
+        ) : isSolana ? (
+          <Notice
+            title="Solana network only"
+            note="Sending assets from another network may result in permanent loss."
+          >
+            {`Only send SOL or SPL tokens on ${networkLabel} to this address.`}
           </Notice>
         ) : (
           <Notice title="Check network" note="Wrong network may cause loss of funds.">
@@ -552,6 +576,20 @@ export function ReceivePage({
             <div className="receive-network-error">{addressError}</div>
           ) : (
             <>
+              {/* Bitcoin + Solana receive show a QR of the address for easy
+                  scanning (the QR carries the plain base58/native address). */}
+              {(isBitcoin || isSolana) && receiveAddress ? (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "center",
+                    padding: "10px 0 6px",
+                  }}
+                >
+                  <QrCode value={receiveAddress} size={168} />
+                </div>
+              ) : null}
+
               <div className="receive-address-short">
                 {receiveAddress ? shortAddress(receiveAddress) : "…"}
               </div>

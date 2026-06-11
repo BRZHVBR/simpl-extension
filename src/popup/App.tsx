@@ -14,6 +14,7 @@ import { TransactionHistoryPage } from "./routes/TransactionHistoryPage";
 import { TransactionDetailsPage } from "./routes/TransactionDetailsPage";
 import type { TransactionHistoryItem } from "../core/transactions/transaction-history.service";
 import { AccountPage } from "./routes/AccountPage";
+import { AddAccountPage } from "./routes/AddAccountPage";
 import { AccountDetailsPage } from "./routes/AccountDetailsPage";
 import { AddWatchWalletPage } from "./routes/AddWatchWalletPage";
 import { ImportAccountPage } from "./routes/ImportAccountPage";
@@ -36,6 +37,7 @@ export type PopupRoute =
   | "send"
   | "swap"
   | "accounts"
+  | "add-account"
   | "account-details"
   | "add-watch-wallet"
   | "import-account"
@@ -378,13 +380,25 @@ export function App() {
           <AccountPage
             walletState={viewState.walletState}
             onBack={() => setRoute("home")}
-            onChanged={refresh}
-            onAddWatchWallet={() => setRoute("add-watch-wallet")}
-            onImportWallet={() => setRoute("import-account")}
+            onAddAccount={() => setRoute("add-account")}
             onOpenAccountDetails={(account) => {
               setDetailsAccount(account);
               setRoute("account-details");
             }}
+          />
+        );
+
+      case "add-account":
+        if (!viewState.walletState) {
+          return null;
+        }
+
+        return (
+          <AddAccountPage
+            onBack={() => setRoute("accounts")}
+            onChanged={refresh}
+            onImportWallet={() => setRoute("import-account")}
+            onAddWatchWallet={() => setRoute("add-watch-wallet")}
           />
         );
 

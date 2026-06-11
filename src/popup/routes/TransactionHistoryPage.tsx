@@ -296,9 +296,19 @@ export function TransactionHistoryPage({
       return;
     }
 
+    const bitcoinAddresses =
+      "bitcoinAddresses" in selectedAccount && selectedAccount.bitcoinAddresses
+        ? Object.values(selectedAccount.bitcoinAddresses).flatMap((pair) => [
+            pair.receive,
+            pair.change,
+          ])
+        : [];
+
     const accountAddresses = [
       selectedAccount.address,
       "tronAddress" in selectedAccount ? selectedAccount.tronAddress : null,
+      "solanaAddress" in selectedAccount ? selectedAccount.solanaAddress : null,
+      ...bitcoinAddresses,
     ];
 
     const currentItems =
@@ -311,24 +321,56 @@ export function TransactionHistoryPage({
         item.status === "submitted",
     );
 
-    if (submittedItems.length === 0) return;
-
-    await Promise.allSettled(
-      submittedItems.map(async (item) => {
-        const status = await walletService.getSelectedTransactionStatus({
-          hash: item.hash,
-        });
-        if (status !== item.status) {
-          transactionHistoryService.updateStatus({
-            chainId: item.chainId,
+    if (submittedItems.length > 0) {
+      await Promise.allSettled(
+        submittedItems.map(async (item) => {
+          const status = await walletService.getSelectedTransactionStatus({
             hash: item.hash,
-            status,
           });
-        }
-      }),
+          if (status !== item.status) {
+            transactionHistoryService.updateStatus({
+              chainId: item.chainId,
+              hash: item.hash,
+              status,
+            });
+          }
+        }),
+      );
+    }
+
+    const localItems =
+      transactionHistoryService.listByAddresses(accountAddresses);
+
+    // Bitcoin + Solana: merge live on-chain activity (incoming + outgoing) with
+    // any locally recorded sends, de-duplicating by id and preferring the live
+    // entry (it carries confirmation status + block time). Each call is for the
+    // currently selected network only and returns [] off-network or on failure.
+    let liveItems: TransactionHistoryItem[] = [];
+    try {
+      const [bitcoin, solana] = await Promise.all([
+        walletService.getSelectedBitcoinActivity().catch(() => []),
+        walletService.getSelectedSolanaActivity().catch(() => []),
+      ]);
+      liveItems = [...bitcoin, ...solana];
+    } catch {
+      liveItems = [];
+    }
+
+    if (liveItems.length === 0) {
+      setItems(localItems);
+      return;
+    }
+
+    const liveIds = new Set(liveItems.map((item) => item.id));
+    const merged = [
+      ...liveItems,
+      ...localItems.filter((item) => !liveIds.has(item.id)),
+    ].sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
 
-    setItems(transactionHistoryService.listByAddresses(accountAddresses));
+    setItems(merged);
   }
 
   useEffect(() => {
@@ -340,9 +382,19 @@ export function TransactionHistoryPage({
       setConfirmClearOpen(false);
       return;
     }
+    const bitcoinAddresses =
+      "bitcoinAddresses" in selectedAccount && selectedAccount.bitcoinAddresses
+        ? Object.values(selectedAccount.bitcoinAddresses).flatMap((pair) => [
+            pair.receive,
+            pair.change,
+          ])
+        : [];
+
     transactionHistoryService.clearByAddresses([
       selectedAccount.address,
       "tronAddress" in selectedAccount ? selectedAccount.tronAddress : null,
+      "solanaAddress" in selectedAccount ? selectedAccount.solanaAddress : null,
+      ...bitcoinAddresses,
     ]);
     setConfirmClearOpen(false);
     void refresh();

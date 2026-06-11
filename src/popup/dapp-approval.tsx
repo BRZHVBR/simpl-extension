@@ -1,3 +1,6 @@
+// Must be first: installs the Buffer/global polyfills @solana/web3.js needs at
+// runtime, before the wallet.service chunk (which bundles it) is evaluated.
+import "../polyfills/buffer";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import DappApprovalPage from "./routes/DappApprovalPage";

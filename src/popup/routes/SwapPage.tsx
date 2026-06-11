@@ -32,7 +32,10 @@ import {
   type RegisteredToken,
 } from "../../core/tokens/token-registry";
 import { hiddenAssetService } from "../../core/tokens/hidden-asset.service";
-import { getNetworkDisplayName } from "../../core/networks/chain-registry";
+import {
+  getNetworkDisplayName,
+  isSolanaChainId,
+} from "../../core/networks/chain-registry";
 import { AssetIcon } from "../components/AssetIcon";
 import { SelectNetworkPage } from "../components/SelectNetworkPage";
 import "./SwapPage.css";
@@ -2373,6 +2376,35 @@ if (selectedAccount && fromToken && toToken) {
           <div className="watch-only-guard__title">Watch-only account</div>
           <div className="watch-only-guard__text">
             This account cannot swap assets because it cannot sign transactions.
+          </div>
+          <button className="btn secondary lg full" type="button" onClick={onBack}>
+            Back to wallet
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Solana is not part of the EVM 0x swap flow. Gate it with a clear notice
+  // instead of letting the EVM quote/approval path run for a Solana network.
+  if (isSolanaChainId(selectedChainId)) {
+    return (
+      <div className="ext-popup swap-page" data-screen-label="Swap – Solana">
+        <div className="bar-top">
+          <button className="icbtn" type="button" onClick={onBack} aria-label="Back">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-1)" }}>
+            Swap
+          </div>
+        </div>
+        <div className="screen-body watch-only-guard">
+          <div className="watch-only-guard__title">Solana swaps are coming soon</div>
+          <div className="watch-only-guard__text">
+            Token swaps are not yet available on Solana. Switch to a supported
+            network to swap.
           </div>
           <button className="btn secondary lg full" type="button" onClick={onBack}>
             Back to wallet

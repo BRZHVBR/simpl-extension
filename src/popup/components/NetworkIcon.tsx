@@ -9,6 +9,13 @@ type NetworkIconProps = {
   showTestnetBadge?: boolean;
 };
 
+import {
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+  SOLANA_DEVNET_CHAIN_ID,
+} from "../../core/networks/chain-registry";
+
 const CHAIN_ID_TO_NAME: Record<number, string> = {
   1: "ethereum",
   56: "bnb",
@@ -19,6 +26,10 @@ const CHAIN_ID_TO_NAME: Record<number, string> = {
   10: "optimism",
   43114: "avalanche",
   728126428: "tron",
+  [BITCOIN_MAINNET_CHAIN_ID]: "bitcoin",
+  [BITCOIN_TESTNET_CHAIN_ID]: "bitcoin-testnet",
+  [SOLANA_MAINNET_CHAIN_ID]: "solana",
+  [SOLANA_DEVNET_CHAIN_ID]: "solana-devnet",
 };
 
 // Sepolia reuses the Ethereum icon; the badge distinguishes it visually.
@@ -32,6 +43,12 @@ const ICON_FILE: Record<string, string> = {
   optimism: "/network-icons/optimism.svg",
   avalanche: "/network-icons/avalanche.svg",
   tron: "/network-icons/tron.svg",
+  bitcoin: "/network-icons/bitcoin.svg",
+  // Testnet reuses the Bitcoin art; the testnet badge distinguishes it.
+  "bitcoin-testnet": "/network-icons/bitcoin.svg",
+  solana: "/network-icons/solana.svg",
+  // Devnet reuses the Solana art; the testnet badge distinguishes it.
+  "solana-devnet": "/network-icons/solana.svg",
 };
 
 const FALLBACK_COLORS: Record<string, string> = {
@@ -44,9 +61,13 @@ const FALLBACK_COLORS: Record<string, string> = {
   optimism: "#FF0420",
   avalanche: "#E84142",
   tron: "#EB0029",
+  bitcoin: "#F7931A",
+  "bitcoin-testnet": "#F7931A",
+  solana: "#9945FF",
+  "solana-devnet": "#9945FF",
 };
 
-const TESTNET_NAMES = new Set(["sepolia"]);
+const TESTNET_NAMES = new Set(["sepolia", "bitcoin-testnet", "solana-devnet"]);
 
 function resolveNetworkName(
   chainId?: number | string | null,
@@ -64,6 +85,9 @@ function resolveNetworkName(
   if (!raw) return null;
 
   if (raw.includes("sepolia")) return "sepolia";
+  // Bitcoin testnet must be checked before mainnet (it also contains "bitcoin").
+  if (raw.includes("bitcoin testnet") || raw === "tbtc") return "bitcoin-testnet";
+  if (raw.includes("bitcoin") || raw === "btc") return "bitcoin";
   if (raw.includes("ethereum") || raw === "eth" || raw.includes("mainnet")) return "ethereum";
   if (raw === "bnb" || raw === "bsc" || raw.includes("smart chain")) return "bnb";
   if (raw === "base") return "base";
@@ -72,6 +96,9 @@ function resolveNetworkName(
   if (raw.includes("optimism") || raw === "op") return "optimism";
   if (raw.includes("avalanche") || raw === "avax") return "avalanche";
   if (raw.includes("tron") || raw === "trx") return "tron";
+  // Solana devnet must be checked before mainnet (it also contains "solana").
+  if (raw.includes("solana devnet") || raw === "sol devnet") return "solana-devnet";
+  if (raw.includes("solana") || raw === "sol") return "solana";
 
   return null;
 }

@@ -1,11 +1,7 @@
 // src/popup/routes/SettingsPage.tsx
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { WalletState } from "../../core/storage/storage.types";
-import {
-  SimpleInstrumentIcon,
-  type SimpleInstrument,
-} from "../components/SimpleInstrumentIcon";
 import { walletService } from "../../core/wallet/wallet.service";
 import { storageRepository } from "../../core/storage/storage.repository";
 import { nativeMessagingClient } from "../../core/native/native-messaging.client";
@@ -15,12 +11,10 @@ import {
 } from "../../core/security/biometric-unlock.helpers";
 import { openFullscreenApp, openSidePanel } from "../surface-actions";
 import { getNetworkDisplayName } from "../../core/networks/chain-registry";
+import { NetworkIcon } from "../components/NetworkIcon";
 import { SelectNetworkPage } from "../components/SelectNetworkPage";
 
 import SecurityCenterPage from "./SecurityCenterPage";
-
-
-type SettingsConfirmAction = "clear-wallet" | null;
 
 type SettingsPageProps = {
   walletState: WalletState;
@@ -64,6 +58,15 @@ const CHAIN_OPTIONS: ChainOption[] = [
   },
 ];
 
+// Detect the current surface so the Display section can mark "Open full screen"
+// as the active surface (a small "Current" pill instead of a chevron).
+function getSurface(): "popup" | "sidepanel" | "fullscreen" {
+  const attr = document.documentElement.getAttribute("data-simple-surface");
+  if (attr === "fullscreen") return "fullscreen";
+  if (attr === "sidepanel") return "sidepanel";
+  return "popup";
+}
+
 function BackIcon() {
   return <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>;
 }
@@ -85,15 +88,6 @@ function SettingsIcon() {
   );
 }
 
-function CrosshairIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" />
-      <path d="M12 3v5M12 16v5M3 12h5M16 12h5" fill="none" stroke="currentColor" />
-    </svg>
-  );
-}
-
 function PanelIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -103,10 +97,14 @@ function PanelIcon() {
   );
 }
 
-function SquareIcon() {
+function ExpandIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="7" y="7" width="10" height="10" rx="2" fill="none" stroke="currentColor" />
+      <path
+        d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"
+        fill="none"
+        stroke="currentColor"
+      />
     </svg>
   );
 }
@@ -120,6 +118,27 @@ function ShieldIcon() {
   );
 }
 
+function FingerprintIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M5.5 11a6.5 6.5 0 0 1 13 0M8 11a4 4 0 0 1 8 0v1.5M12 11v3.5M9.2 13.5c0 2.5.6 4 1.3 5.4M14.8 13v2c0 1.6.3 2.8.8 4M6.5 14.5c0 2 .4 3.5 1 4.7"
+        fill="none"
+        stroke="currentColor"
+      />
+    </svg>
+  );
+}
+
+function PhraseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="5" width="17" height="14" rx="3" fill="none" stroke="currentColor" />
+      <path d="M7 9.5h6M7 13h8M7 16.5h4" fill="none" stroke="currentColor" />
+    </svg>
+  );
+}
+
 function KeyIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -129,97 +148,133 @@ function KeyIcon() {
   );
 }
 
-function TrashIcon() {
+function LockIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" fill="none" stroke="currentColor" />
+      <rect x="5" y="11" width="14" height="9" rx="2.5" fill="none" stroke="currentColor" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" />
     </svg>
   );
 }
 
-function SectionLabel({ children }: { children: string }) {
+function Chevron() {
   return (
-    <div
-      className="lbl"
-      style={{
-        fontSize: 11,
-        letterSpacing: "0.12em",
-        textTransform: "uppercase",
-        marginBottom: 8,
-      }}
+    <svg
+      className="set-row__chev"
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
     >
-      {children}
-    </div>
+      <path d="M9 6l6 6-6 6" />
+    </svg>
   );
 }
 
-function Chevron() {
-  return <div className="q">›</div>;
-}
+type RowTone = "brand" | "neutral" | "secure" | "warn" | "danger";
 
-function Row({
+// Clickable settings row: tinted icon + title/subtitle + right-side affordance.
+// The whole row is the button so the hit area is the full width.
+function ActionRow({
   icon,
-  instrument,
+  tone = "neutral",
   title,
   subtitle,
-  value,
-  danger,
+  aside,
   onClick,
 }: {
-  icon?: React.ReactNode;
-  instrument?: SimpleInstrument;
+  icon: ReactNode;
+  tone?: RowTone;
   title: string;
-  subtitle?: string;
-  value?: string;
-  danger?: boolean;
+  subtitle: string;
+  aside?: ReactNode;
   onClick?: () => void;
 }) {
   return (
     <button
       type="button"
-      className="row"
+      className="set-row"
       onClick={onClick}
-      style={{
-        width: "100%",
-        border: 0,
-        background: "transparent",
-        textAlign: "left",
-        cursor: onClick ? "pointer" : "default",
-      }}
+      disabled={!onClick}
     >
-      {instrument ? (
-        <SimpleInstrumentIcon instrument={instrument} />
-      ) : (
-        <div
-          className="tok"
-          style={
-            danger
-              ? {
-                  background: "var(--danger-soft)",
-                  color: "var(--danger)",
-                }
-              : undefined
-          }
-        >
-          {icon}
-        </div>
-      )}
+      <span className={`set-row__icon set-row__icon--${tone}`}>{icon}</span>
 
-      <div className="body">
-        <div
-          className="nm"
-          style={danger ? { color: "var(--danger)" } : undefined}
-        >
-          {title}
-        </div>
+      <span className="set-row__body">
+        <span className="set-row__title">{title}</span>
+        <span className="set-row__sub">{subtitle}</span>
+      </span>
 
-        {subtitle ? <div className="sub">{subtitle}</div> : null}
-      </div>
-
-      <div className="num">
-        {value ? <div className="v">{value}</div> : onClick ? <Chevron /> : null}
-      </div>
+      <span className="set-row__aside">{aside ?? (onClick ? <Chevron /> : null)}</span>
     </button>
+  );
+}
+
+// Toggle switch (role=switch) used for the single-row Touch ID control.
+function Toggle({
+  checked,
+  disabled,
+  onClick,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={`set-toggle${checked ? " set-toggle--on" : ""}`}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className="set-toggle__knob" />
+    </button>
+  );
+}
+
+// Non-clickable row wrapper (the right-side control owns the interaction).
+function ControlRow({
+  icon,
+  tone = "neutral",
+  title,
+  subtitle,
+  control,
+}: {
+  icon: ReactNode;
+  tone?: RowTone;
+  title: string;
+  subtitle: string;
+  control: ReactNode;
+}) {
+  return (
+    <div className="set-row set-row--static">
+      <span className={`set-row__icon set-row__icon--${tone}`}>{icon}</span>
+
+      <span className="set-row__body">
+        <span className="set-row__title">{title}</span>
+        <span className="set-row__sub">{subtitle}</span>
+      </span>
+
+      <span className="set-row__aside">{control}</span>
+    </div>
+  );
+}
+
+function Section({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section className="set-section">
+      <div className="set-section__label">{label}</div>
+      <div className="set-card">{children}</div>
+    </section>
   );
 }
 
@@ -240,17 +295,21 @@ export function SettingsPage({
   onChanged,
   onRevealSeed,
   onRevealPrivateKey,
-}: SettingsPageProps) {  const [showSecurityCenter, setShowSecurityCenter] = useState(false);
-  const [settingsConfirmAction, setSettingsConfirmAction] = useState<SettingsConfirmAction>(null);
+}: SettingsPageProps) {
+  const [showSecurityCenter, setShowSecurityCenter] = useState(false);
 
   const [nativeStatus, setNativeStatus] = useState<string | null>(null);
   const [touchIdPassword, setTouchIdPassword] = useState("");
+  // Inline enable form (password) shown when turning Touch ID ON — enabling
+  // biometrics requires the wallet password, disabling does not.
+  const [touchIdFormOpen, setTouchIdFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [networkSelectorOpen, setNetworkSelectorOpen] = useState(false);
 
   const biometricEnabled = walletState.settings.biometricUnlock.enabled;
   const walletId = getBiometricWalletId(walletState);
   const activeChain = getActiveChain(walletState.selectedChainId);
+  const surface = getSurface();
 
   async function handleChanged() {
     await onChanged();
@@ -260,6 +319,18 @@ export function SettingsPage({
     setNetworkSelectorOpen(false);
     await walletService.setSelectedChainId(chainId);
     await handleChanged();
+  }
+
+  // The Touch ID toggle: enabled → disable directly; disabled → reveal the
+  // inline password form so the user can confirm and enable.
+  function onToggleTouchId() {
+    if (saving) return;
+    if (biometricEnabled) {
+      void disableTouchIdUnlock();
+    } else {
+      setNativeStatus(null);
+      setTouchIdFormOpen((open) => !open);
+    }
   }
 
   async function enableTouchIdUnlock() {
@@ -315,6 +386,7 @@ export function SettingsPage({
     });
 
     setTouchIdPassword("");
+    setTouchIdFormOpen(false);
     setNativeStatus("Touch ID unlock enabled.");
     setSaving(false);
 
@@ -355,13 +427,11 @@ export function SettingsPage({
     await handleChanged();
   }
 
-    async function clearWallet() {
-    setSettingsConfirmAction("clear-wallet");
-  }
-
-  async function executeClearWallet() {
-    setSettingsConfirmAction(null);
-
+  // Destructive wallet removal. The Danger Zone UI + confirmation now live in
+  // Security Center; this owns the actual deletion (vault key + wallet clear +
+  // state refresh) because walletState / walletId live here. Behavior is
+  // unchanged from when the action was in Settings.
+  async function clearWalletNow() {
     const credentialId =
       walletState.settings.biometricUnlock.credentialId ?? walletId;
 
@@ -383,314 +453,194 @@ export function SettingsPage({
     );
   }
 
-  return showSecurityCenter ? (
-    <SecurityCenterPage
-    onBack={() => {
-      setShowSecurityCenter(false);
-      void handleChanged();
-    }}
-    initialSnapshot={{
-      settings: walletState.settings,
-      biometricUnlock: walletState.settings.biometricUnlock,
-      selectedChainId: walletState.selectedChainId,
-    }}
-  />
-  ) : (
-    <>
+  if (showSecurityCenter) {
+    return (
+      <SecurityCenterPage
+        onBack={() => {
+          setShowSecurityCenter(false);
+          void handleChanged();
+        }}
+        onClearWallet={clearWalletNow}
+        initialSnapshot={{
+          settings: walletState.settings,
+          biometricUnlock: walletState.settings.biometricUnlock,
+          selectedChainId: walletState.selectedChainId,
+        }}
+      />
+    );
+  }
 
-      {settingsConfirmAction === "clear-wallet" ? (
-        <div
-          role="presentation"
-          onClick={() => setSettingsConfirmAction(null)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 80,
-            display: "grid",
-            alignItems: "end",
-            background: "rgba(0, 0, 0, 0.24)",
-            padding: "0 0 16px",
-            boxSizing: "border-box",
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-label="Clear wallet confirmation"
-            onClick={(event) => event.stopPropagation()}
+  return (
+    <div className="ext-popup settings-page" data-screen-label="08 Settings">
+        <div className="bar-top">
+          <button className="icbtn" type="button" onClick={onBack} aria-label="Back">
+            <BackIcon />
+          </button>
+
+          <div
             style={{
-              width: "100%",
-              maxWidth: 680,
-              margin: "0 auto",
-              padding: "0 12px",
-              boxSizing: "border-box",
-            }}
-          >
-            <div
-              style={{
-                border: "1px solid var(--border, #dedede)",
-                borderRadius: 24,
-                background: "var(--bg, #ffffff)",
-                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.18)",
-                padding: 18,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 18,
-                  lineHeight: "24px",
-                  fontWeight: 850,
-                  letterSpacing: "-0.02em",
-                }}
-              >
-                Clear wallet?
-              </div>
-
-              <p
-                style={{
-                  margin: "8px 0 0",
-                  color: "var(--text-secondary, #777777)",
-                  fontSize: 13,
-                  lineHeight: "19px",
-                }}
-              >
-                Your wallet, accounts, imported tokens, local activity, and
-                wallet-specific settings will be removed from this browser. Make
-                sure your recovery phrase is safely backed up before continuing.
-              </p>
-
-              <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
-                <button
-                  type="button"
-                  className="btn primary lg full"
-                  onClick={() => void executeClearWallet()}
-                  style={{
-                    background: "#a23b2d",
-                    borderColor: "#a23b2d",
-                  }}
-                >
-                  Clear wallet
-                </button>
-
-                <button
-                  type="button"
-                  className="btn secondary lg full"
-                  onClick={() => setSettingsConfirmAction(null)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-    <div className="ext-popup" data-screen-label="08 Settings">
-      <div className="bar-top">
-        <button className="icbtn" type="button" onClick={onBack}>
-          <BackIcon />
-        </button>
-
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 650,
-            color: "var(--ink-1)",
-          }}
-        >
-          Settings
-        </div>
-
-        <span style={{ flex: 1 }} />
-
-        <button className="icbtn" type="button" onClick={onBack}>
-          <SettingsIcon />
-        </button>
-      </div>
-
-      <div className="screen-body">
-        <section style={{ padding: "18px 16px 12px" }}>
-          <div className="t-h2">
-            Wallet
-            <br />
-            settings
-          </div>
-
-          <p
-            style={{
-              margin: "10px 0 0",
-              color: "var(--ink-3)",
               fontSize: 13,
-              lineHeight: 1.45,
+              fontWeight: 650,
+              color: "var(--ink-1)",
             }}
           >
-            Manage networks, security, recovery and wallet session.
-          </p>
-        </section>
-
-        {nativeStatus ? (
-          <section
-            style={{
-              margin: "0 12px 12px",
-              padding: "10px 12px",
-              borderRadius: 12,
-              background: "var(--bg-sunken)",
-              color: "var(--ink-2)",
-              fontSize: 12,
-              lineHeight: 1.45,
-            }}
-          >
-            {nativeStatus}
-          </section>
-        ) : null}
-
-        <section style={{ padding: "0 12px 16px" }}>
-          <SectionLabel>Network</SectionLabel>
-
-          <div className="row-list">
-            <Row
-              icon={<CrosshairIcon />}
-              instrument="networks"
-              title={getNetworkDisplayName(walletState.selectedChainId)}
-              subtitle={activeChain.subtitle}
-              value="Change"
-              onClick={() => setNetworkSelectorOpen(true)}
-            />
-          </div>
-        </section>
-
-        <section style={{ padding: "0 12px 16px" }}>
-          <SectionLabel>Display</SectionLabel>
-
-          <div className="row-list">
-            <Row
-              icon={<PanelIcon />}
-              instrument="settings"
-              title="Open side panel"
-              subtitle="Use SIMPLE as a slide-out browser panel."
-              onClick={() => void openSidePanel()}
-            />
-
-            <Row
-              icon={<SquareIcon />}
-              instrument="settings"
-              title="Open full screen"
-              subtitle="Open SIMPLE in a dedicated browser tab."
-              onClick={openFullscreenApp}
-            />
-          </div>
-        </section>
-
-        <section style={{ padding: "0 12px 16px" }}>
-          <SectionLabel>Security</SectionLabel>
-
-          <div className="row-list">
-            <Row
-              icon={<ShieldIcon />}
-              instrument="security"
-              title="Security Center"
-              subtitle="Review wallet protection and recovery status."
-              onClick={() => setShowSecurityCenter(true)}
-            />
-
-            <Row
-              icon={<ShieldIcon />}
-              instrument="security"
-              title="Touch ID"
-              subtitle="Biometric unlock on this device."
-              value={biometricEnabled ? "Enabled" : "Disabled"}
-            />
-
+            Settings
           </div>
 
-          {!biometricEnabled ? (
-            <div
-              style={{
-                marginTop: 10,
-                display: "grid",
-                gap: 10,
-              }}
-            >
-              <input
-                className="input lg"
-                type="password"
-                value={touchIdPassword}
-                placeholder="Wallet password"
-                autoComplete="current-password"
-                onChange={(event) => setTouchIdPassword(event.target.value)}
+          <span style={{ flex: 1 }} />
+
+          <button className="icbtn" type="button" onClick={onBack} aria-label="Settings">
+            <SettingsIcon />
+          </button>
+        </div>
+
+        <div className="screen-body settings-body">
+          <header className="set-hero">
+            <div className="set-hero__title">Wallet settings</div>
+            <div className="set-hero__sub">
+              Manage security, recovery, display, and wallet session.
+            </div>
+          </header>
+
+          {nativeStatus ? <div className="set-status">{nativeStatus}</div> : null}
+
+          <div className="set-grid">
+            <Section label="Wallet">
+              <ActionRow
+                icon={
+                  <NetworkIcon
+                    chainId={walletState.selectedChainId}
+                    size={36}
+                  />
+                }
+                tone="brand"
+                title={getNetworkDisplayName(walletState.selectedChainId)}
+                subtitle={activeChain.subtitle}
+                aside={<span className="set-row__change">Change</span>}
+                onClick={() => setNetworkSelectorOpen(true)}
+              />
+            </Section>
+
+            <Section label="Display">
+              <ActionRow
+                icon={<PanelIcon />}
+                tone="neutral"
+                title="Open side panel"
+                subtitle="Use SIMPLE in a slide-out browser panel."
+                aside={
+                  surface === "sidepanel" ? (
+                    <span className="set-row__pill">Current</span>
+                  ) : undefined
+                }
+                onClick={() => void openSidePanel()}
               />
 
-              <button
-                type="button"
-                className="btn primary lg full"
-                onClick={() => void enableTouchIdUnlock()}
-                disabled={saving}
-              >
-                {saving ? "Enabling…" : "Enable Touch ID"}
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="btn secondary lg full"
-              onClick={() => void disableTouchIdUnlock()}
-              disabled={saving}
-              style={{ marginTop: 10 }}
-            >
-              {saving ? "Disabling…" : "Disable Touch ID"}
-            </button>
-          )}
-        </section>
+              <ActionRow
+                icon={<ExpandIcon />}
+                tone="neutral"
+                title="Open full screen"
+                subtitle="Open SIMPLE in a dedicated browser tab."
+                aside={
+                  surface === "fullscreen" ? (
+                    <span className="set-row__pill">Current</span>
+                  ) : undefined
+                }
+                onClick={surface === "fullscreen" ? undefined : openFullscreenApp}
+              />
+            </Section>
 
-        <section style={{ padding: "0 12px 16px" }}>
-          <SectionLabel>Recovery</SectionLabel>
+            <Section label="Security">
+              <ActionRow
+                icon={<ShieldIcon />}
+                tone="secure"
+                title="Security Center"
+                subtitle="Backup, biometrics, auto-lock, and privacy controls."
+                onClick={() => setShowSecurityCenter(true)}
+              />
 
-          <div className="row-list">
-            <Row
-              icon={<KeyIcon />}
-              instrument="security"
-              title="Reveal seed phrase"
-              subtitle="Show wallet recovery phrase."
-              onClick={onRevealSeed}
-            />
+              <ControlRow
+                icon={<FingerprintIcon />}
+                tone="secure"
+                title="Touch ID"
+                subtitle="Unlock this wallet with biometrics on this device."
+                control={
+                  <Toggle
+                    checked={biometricEnabled}
+                    disabled={saving}
+                    onClick={onToggleTouchId}
+                    label="Toggle Touch ID unlock"
+                  />
+                }
+              />
 
-            <Row
-              icon={<KeyIcon />}
-              instrument="security"
-              title="Reveal private key"
-              subtitle="Show selected account private key."
-              onClick={onRevealPrivateKey}
-            />
+              {!biometricEnabled && touchIdFormOpen ? (
+                <div className="set-touchid-form">
+                  <input
+                    className="input lg"
+                    type="password"
+                    value={touchIdPassword}
+                    placeholder="Wallet password"
+                    autoComplete="current-password"
+                    onChange={(event) => setTouchIdPassword(event.target.value)}
+                  />
+
+                  <div className="set-touchid-form__actions">
+                    <button
+                      type="button"
+                      className="btn secondary lg"
+                      onClick={() => {
+                        setTouchIdFormOpen(false);
+                        setTouchIdPassword("");
+                        setNativeStatus(null);
+                      }}
+                      disabled={saving}
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn primary lg"
+                      onClick={() => void enableTouchIdUnlock()}
+                      disabled={saving || !touchIdPassword}
+                    >
+                      {saving ? "Enabling…" : "Enable"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </Section>
+
+            <Section label="Recovery">
+              <ActionRow
+                icon={<PhraseIcon />}
+                tone="warn"
+                title="Reveal seed phrase"
+                subtitle="View your wallet recovery phrase."
+                onClick={onRevealSeed}
+              />
+
+              <ActionRow
+                icon={<KeyIcon />}
+                tone="warn"
+                title="Reveal private key"
+                subtitle="View the private key for the selected account."
+                onClick={onRevealPrivateKey}
+              />
+            </Section>
+
+            <Section label="Session">
+              <ActionRow
+                icon={<LockIcon />}
+                tone="neutral"
+                title="Lock wallet"
+                subtitle="Return to the unlock screen."
+                onClick={() => void lockWallet()}
+              />
+            </Section>
           </div>
-        </section>
-
-        <section style={{ padding: "0 12px 24px" }}>
-          <SectionLabel>Session</SectionLabel>
-
-          <div className="row-list">
-            <Row
-              icon={<ShieldIcon />}
-              instrument="security"
-              title="Lock wallet"
-              subtitle="Return to unlock screen."
-              onClick={() => void lockWallet()}
-            />
-
-            <Row
-              icon={<TrashIcon />}
-              instrument="security"
-              title="Clear wallet from browser"
-              subtitle="Remove local encrypted wallet data."
-              danger
-              onClick={() => void clearWallet()}
-            />
-          </div>
-        </section>
+        </div>
       </div>
-
-    </div>
-  
-    </>
   );
 }
 

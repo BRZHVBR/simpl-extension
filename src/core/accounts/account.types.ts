@@ -2,6 +2,20 @@ import type { EvmAddress, EvmDerivationPath } from "./derivation";
 
 export type WalletAccountId = string;
 
+// Bitcoin is UTXO-based with a receive + change address per network. These are
+// public addresses only (BIP-84 native SegWit, m/84'/coin'/{index}'/{0|1}/0),
+// derived lazily and persisted for display — the same lazy-migration pattern as
+// `tronAddress`. Keyed by the internal Bitcoin chain id (mainnet vs testnet use
+// different coin types and address prefixes). Never carries key material.
+// TODO(btc): when HD address rotation / gap scanning lands, this becomes a list
+// of receive addresses per network instead of a single fixed pair.
+export type BitcoinAccountAddresses = {
+  receive: string;
+  change: string;
+};
+
+export type BitcoinAddressMap = Record<number, BitcoinAccountAddresses>;
+
 // Account "source" discriminator:
 // - "mnemonic"         → derived from the primary wallet seed at a BIP-44 index
 // - "importedMnemonic" → first account of a separately imported recovery phrase
@@ -25,6 +39,11 @@ export type MnemonicWalletAccount = {
   index: number;
   address: EvmAddress;
   tronAddress?: string;
+  bitcoinAddresses?: BitcoinAddressMap;
+  // Solana base58 public key (Ed25519, m/44'/501'/index'/0'). Absent on stored
+  // accounts created before Solana support — derived lazily and persisted on
+  // first use, the same migration pattern as `tronAddress`. Never key material.
+  solanaAddress?: string;
   label: string;
   derivationPath: EvmDerivationPath;
   createdAt: string;
@@ -38,6 +57,8 @@ export type ImportedMnemonicWalletAccount = {
   index: number;
   address: EvmAddress;
   tronAddress?: string;
+  bitcoinAddresses?: BitcoinAddressMap;
+  solanaAddress?: string;
   label: string;
   derivationPath: EvmDerivationPath;
   createdAt: string;

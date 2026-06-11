@@ -90,10 +90,19 @@ html[data-simple-surface="sidepanel"] .ext-popup {
 
 .net-chip {
   flex: 0 0 auto !important;
-  max-width: 104px !important;
+  max-width: 132px !important;
   min-width: 0 !important;
   height: 32px !important;
   padding: 0 9px !important;
+}
+
+/* The network label sits next to the icon; it ellipsizes if a name is still
+   too long for the chip (full name stays in the chip's title/aria-label). */
+.net-chip .net-chip-label {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .icbtn {
@@ -3661,6 +3670,45 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
   font-weight: 600 !important;
 }
 
+/* Reference-price treatment for testnet/devnet native assets (BTC Testnet,
+   Solana Devnet): a small "Reference" pill on the chart, a clear note under the
+   stats, and muted value text — so reference data never reads as real funds. */
+.asset-chart-ref-pill {
+  display: inline-block !important;
+  margin-left: 6px !important;
+  padding: 1px 6px !important;
+  border-radius: 999px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+  vertical-align: middle !important;
+  color: var(--ink-3) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--line) !important;
+}
+
+.asset-reference-note {
+  margin: 0 0 4px !important;
+  padding: 8px 10px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 8px !important;
+  background: var(--bg-surface) !important;
+  color: var(--ink-3) !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+.asset-details-stat__value--muted {
+  color: var(--ink-3) !important;
+  font-weight: 600 !important;
+}
+
+/* Reference tag in a home asset row's value slot. */
+.num .v--muted {
+  color: var(--ink-3) !important;
+  font-weight: 600 !important;
+}
+
 /* 24h volume block (chart card header, right column) */
 .asset-chart-vol-label {
   font-size: 11px !important;
@@ -5245,4 +5293,613 @@ html[data-simple-surface="fullscreen"] .account-sheet-backdrop {
   display: inline-flex !important;
   color: var(--secure, #2a6f4e) !important;
   margin-left: 2px !important;
+}
+
+/* ============================================================
+   SETTINGS PAGE (redesign)
+   Section cards + tinted-icon rows + single-row Touch ID toggle +
+   separated Danger Zone. Self-contained classes so the rigid shared
+   `.row` grid is not reused here.
+   ============================================================ */
+
+.settings-page .settings-body {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+  padding: 14px 14px 28px !important;
+}
+
+/* Compact hero */
+.set-hero {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+
+.set-hero__title {
+  font-size: 22px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.02em !important;
+  color: var(--ink-1) !important;
+  line-height: 1.1 !important;
+}
+
+.set-hero__sub {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  color: var(--ink-3) !important;
+}
+
+/* Inline status banner (Touch ID native messaging feedback) */
+.set-status {
+  padding: 10px 12px !important;
+  border-radius: 12px !important;
+  background: var(--bg-sunken, #f5f5f3) !important;
+  border: 1px solid var(--line, #e5e5e5) !important;
+  color: var(--ink-2, #2a2a2a) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+
+/* Layout: a single vertical column of sections on every surface. */
+.set-grid {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+}
+
+/* Section: small uppercase label + card */
+.set-section {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+.set-section__label {
+  padding: 0 4px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: var(--ink-3) !important;
+}
+
+.set-card {
+  display: flex !important;
+  flex-direction: column !important;
+  border: 1px solid var(--line, #e5e5e5) !important;
+  border-radius: 20px !important;
+  background: var(--bg-surface, #ffffff) !important;
+  overflow: hidden !important;
+}
+
+/* Rows */
+.set-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  min-height: 62px !important;
+  padding: 11px 14px !important;
+  border: 0 !important;
+  background: transparent !important;
+  text-align: left !important;
+  font: inherit !important;
+  color: inherit !important;
+  cursor: pointer !important;
+  transition: background 100ms ease !important;
+}
+
+.set-row + .set-row,
+.set-row + .set-touchid-form,
+.set-touchid-form + .set-row {
+  border-top: 1px solid var(--line, #e5e5e5) !important;
+}
+
+.set-row--static {
+  cursor: default !important;
+}
+
+button.set-row:hover:not(:disabled),
+.set-danger__row:hover {
+  background: rgba(17, 17, 17, 0.03) !important;
+}
+
+button.set-row:active:not(:disabled) {
+  background: rgba(17, 17, 17, 0.06) !important;
+}
+
+button.set-row:focus-visible,
+.set-danger__row:focus-visible,
+.set-toggle:focus-visible {
+  outline: 2px solid var(--ink-1, #111111) !important;
+  outline-offset: -2px !important;
+  border-radius: 12px !important;
+}
+
+button.set-row:disabled {
+  cursor: default !important;
+}
+
+/* Tinted icon chip */
+.set-row__icon {
+  flex: 0 0 36px !important;
+  width: 36px !important;
+  height: 36px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 11px !important;
+  background: var(--bg-sunken, #f3f3f1) !important;
+  color: var(--ink-2, #2a2a2a) !important;
+}
+
+.set-row__icon svg {
+  width: 19px !important;
+  height: 19px !important;
+  stroke-width: 1.7 !important;
+}
+
+/* Brand = real network art, no tinted chip */
+.set-row__icon--brand {
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+.set-row__icon--neutral {
+  background: rgba(96, 108, 128, 0.10) !important;
+  color: #56627a !important;
+}
+
+.set-row__icon--secure {
+  background: var(--secure-soft, rgba(42, 111, 78, 0.10)) !important;
+  color: var(--secure, #2a6f4e) !important;
+}
+
+.set-row__icon--warn {
+  background: var(--warn-soft, rgba(154, 107, 30, 0.12)) !important;
+  color: var(--warn, #9a6b1e) !important;
+}
+
+.set-row__icon--danger {
+  background: var(--danger-soft, rgba(190, 48, 48, 0.10)) !important;
+  color: var(--danger, #be3030) !important;
+}
+
+.set-row__body {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+.set-row__title {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: var(--ink-1, #111111) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.set-row__sub {
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+  color: var(--ink-3, #747474) !important;
+}
+
+/* Right-side affordances */
+.set-row__aside {
+  flex: 0 0 auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  color: var(--ink-4, #9a9a9a) !important;
+}
+
+.set-row__chev {
+  color: var(--ink-4, #9a9a9a) !important;
+}
+
+.set-row__change {
+  font-size: 13px !important;
+  font-weight: 650 !important;
+  color: var(--ink-2, #2a2a2a) !important;
+}
+
+.set-row__pill {
+  padding: 3px 10px !important;
+  border-radius: 999px !important;
+  background: var(--secure-soft, rgba(42, 111, 78, 0.10)) !important;
+  color: var(--secure, #2a6f4e) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+}
+
+/* Pill tone variants (Security Center status pills) */
+.set-row__pill--secure {
+  background: var(--secure-soft, rgba(42, 111, 78, 0.10)) !important;
+  color: var(--secure, #2a6f4e) !important;
+}
+
+.set-row__pill--warn {
+  background: var(--warn-soft, rgba(154, 107, 30, 0.12)) !important;
+  color: var(--warn, #9a6b1e) !important;
+}
+
+.set-row__pill--danger {
+  background: var(--danger-soft, rgba(190, 48, 48, 0.10)) !important;
+  color: var(--danger, #be3030) !important;
+}
+
+.set-row__pill--neutral {
+  background: rgba(96, 108, 128, 0.12) !important;
+  color: #56627a !important;
+}
+
+/* Neutral value text on the right of a row (e.g. auto-lock "15 min") */
+.set-row__value {
+  font-size: 13px !important;
+  font-weight: 650 !important;
+  color: var(--ink-2, #2a2a2a) !important;
+}
+
+/* Security tips — compact bullet rows inside a section card */
+.sec-tip {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  padding: 11px 14px !important;
+}
+
+.sec-tip + .sec-tip {
+  border-top: 1px solid var(--line, #e5e5e5) !important;
+}
+
+.sec-tip__icon {
+  flex: 0 0 18px !important;
+  width: 18px !important;
+  height: 18px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--secure, #2a6f4e) !important;
+  margin-top: 1px !important;
+}
+
+.sec-tip__text {
+  min-width: 0 !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  color: var(--ink-2, #2a2a2a) !important;
+}
+
+/* Toggle switch */
+.set-toggle {
+  position: relative !important;
+  flex: 0 0 auto !important;
+  width: 44px !important;
+  height: 26px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: var(--line-strong, #d4d4d4) !important;
+  cursor: pointer !important;
+  transition: background 140ms ease !important;
+}
+
+.set-toggle--on {
+  background: var(--secure, #2a6f4e) !important;
+}
+
+.set-toggle:disabled {
+  opacity: 0.6 !important;
+  cursor: default !important;
+}
+
+.set-toggle__knob {
+  position: absolute !important;
+  top: 3px !important;
+  left: 3px !important;
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25) !important;
+  transition: transform 140ms ease !important;
+}
+
+.set-toggle--on .set-toggle__knob {
+  transform: translateX(18px) !important;
+}
+
+/* Inline Touch ID enable form (password) */
+.set-touchid-form {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  padding: 12px 14px 14px !important;
+}
+
+.set-touchid-form .input.lg {
+  width: 100% !important;
+}
+
+.set-touchid-form__actions {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 10px !important;
+}
+
+.set-touchid-form__actions .btn {
+  width: 100% !important;
+}
+
+/* Danger zone — separated card at the bottom */
+.set-danger {
+  display: flex !important;
+  flex-direction: column !important;
+  border: 1px solid rgba(190, 48, 48, 0.28) !important;
+  border-radius: 20px !important;
+  background: rgba(190, 48, 48, 0.035) !important;
+  overflow: hidden !important;
+}
+
+.set-danger__head {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+  padding: 14px 16px 10px !important;
+}
+
+.set-danger__title {
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--danger, #be3030) !important;
+}
+
+.set-danger__desc {
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  color: var(--ink-3, #747474) !important;
+}
+
+.set-danger__row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  min-height: 62px !important;
+  padding: 11px 14px !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(190, 48, 48, 0.18) !important;
+  background: transparent !important;
+  text-align: left !important;
+  font: inherit !important;
+  color: inherit !important;
+  cursor: pointer !important;
+  transition: background 100ms ease !important;
+}
+
+.set-danger__row .set-row__title {
+  color: var(--danger, #be3030) !important;
+}
+
+.set-danger__row:hover {
+  background: rgba(190, 48, 48, 0.06) !important;
+}
+
+.set-danger__row .set-row__aside {
+  color: rgba(190, 48, 48, 0.55) !important;
+}
+
+/* ── Fullscreen ──
+   Settings intentionally has NO page-specific width override: it uses the same
+   default wallet shell as HomePage (.fullscreen-shell / .fullscreen-wallet-frame,
+   ~440px) so the outer card never jumps wider when navigating Home ↔ Settings.
+   It stays a single vertical column on every surface (.set-grid is flex-column
+   by default). Long content scrolls inside the shared .screen-body. */
+
+/* ============================================================
+   REVEAL SEED / PRIVATE KEY PAGES
+   Reuse the import-acct shell (.ext-popup/.import-acct-page), field/input,
+   Notice, and .btn system. Compact hero + secret display are page-specific.
+   ============================================================ */
+
+/* Body — compact, consistent top start on every surface */
+.reveal-body {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  padding: 20px 16px 28px !important;
+}
+
+html[data-simple-surface="fullscreen"] .reveal-body {
+  padding: 28px 24px 40px !important;
+}
+
+/* Compact hero — small soft-square icon next to title + subtitle */
+.reveal-hero {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+.reveal-hero__icon {
+  flex: 0 0 36px !important;
+  width: 36px !important;
+  height: 36px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 12px !important;
+  background: var(--bg-sunken, #f3f3f1) !important;
+  color: var(--ink-2, #2a2a2a) !important;
+}
+
+.reveal-hero__icon svg {
+  width: 19px !important;
+  height: 19px !important;
+}
+
+.reveal-hero__text {
+  min-width: 0 !important;
+}
+
+.reveal-hero__title {
+  font-size: 16px !important;
+  font-weight: 750 !important;
+  letter-spacing: -0.01em !important;
+  color: var(--ink-1, #111111) !important;
+}
+
+.reveal-hero__sub {
+  margin-top: 2px !important;
+  font-size: 12.5px !important;
+  line-height: 1.4 !important;
+  color: var(--ink-3, #747474) !important;
+}
+
+/* Small helper line above the revealed seed grid */
+.reveal-subtle {
+  margin: 0 !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  color: var(--ink-3, #747474) !important;
+}
+
+/* Primary reveal button — intentional disabled state */
+.reveal-page .btn.primary:disabled {
+  background: var(--bg-sunken, #f1f1ee) !important;
+  color: var(--ink-4, #9a9a9a) !important;
+  border-color: var(--line, #e5e5e5) !important;
+  cursor: not-allowed !important;
+}
+
+/* Decorative shield on the right of the top bar (non-interactive) */
+.reveal-bar-icon {
+  flex: 0 0 32px !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--ink-4, #9a9a9a) !important;
+}
+
+/* Account context (private key page) */
+.reveal-acct {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--line, #e5e5e5) !important;
+  border-radius: 16px !important;
+  background: var(--bg-surface, #ffffff) !important;
+}
+
+.reveal-acct__body {
+  min-width: 0 !important;
+}
+
+.reveal-acct__name {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  color: var(--ink-1, #111111) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.reveal-acct__addr {
+  margin-top: 2px !important;
+  font-family: var(--font-mono, monospace) !important;
+  font-size: 12px !important;
+  color: var(--ink-3, #747474) !important;
+}
+
+/* ── Seed phrase: numbered word chips ── */
+.reveal-seed-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+.reveal-seed-word {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  padding: 9px 11px !important;
+  border: 1px solid var(--line, #e5e5e5) !important;
+  border-radius: 12px !important;
+  background: var(--secure-soft, rgba(42, 111, 78, 0.06)) !important;
+}
+
+.reveal-seed-word__num {
+  flex: 0 0 auto !important;
+  width: 18px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  color: var(--ink-4, #9a9a9a) !important;
+  text-align: right !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.reveal-seed-word__text {
+  min-width: 0 !important;
+  font-size: 13.5px !important;
+  font-weight: 650 !important;
+  color: var(--ink-1, #111111) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* ── Private key: safe monospace block ── */
+.reveal-secret {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  padding: 14px !important;
+  border: 1px solid var(--line, #e5e5e5) !important;
+  border-radius: 16px !important;
+  background: var(--secure-soft, rgba(42, 111, 78, 0.06)) !important;
+}
+
+.reveal-secret__label {
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  color: var(--ink-3, #747474) !important;
+}
+
+.reveal-secret__value {
+  font-family: var(--font-mono, monospace) !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+  color: var(--ink-1, #111111) !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* ── Revealed-state actions (Copy / Hide side by side) ── */
+.reveal-actions {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 10px !important;
+}
+
+.reveal-actions .btn {
+  width: 100% !important;
+}
+
+.reveal-copied {
+  border-color: var(--secure, #2a6f4e) !important;
+  color: var(--secure, #2a6f4e) !important;
 }

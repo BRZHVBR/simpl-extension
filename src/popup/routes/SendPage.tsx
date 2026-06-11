@@ -14,9 +14,28 @@ import { transactionHistoryService } from "../../core/transactions/transaction-h
 import {
   getNetworkDisplayName,
   isTronChainId,
+  isBitcoinChainId,
+  isSolanaChainId,
   TRON_MAINNET_CHAIN_ID,
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+  SOLANA_DEVNET_CHAIN_ID,
 } from "../../core/networks/chain-registry";
 import { isValidTronAddress } from "../../chains/tron/tron.address";
+import { isValidBitcoinAddress } from "../../chains/bitcoin/bitcoin.address";
+import { isValidSolanaAddress } from "../../chains/solana/solana.address";
+import {
+  getBitcoinConfigByChainId,
+  getBitcoinTransactionExplorerUrl,
+} from "../../chains/bitcoin/bitcoin.config";
+import { getBitcoinFeeQuotes } from "../../chains/bitcoin/bitcoin.fees";
+import { estimateFeeSats } from "../../chains/bitcoin/bitcoin.transactions";
+import { satsToBtc, btcToSats } from "../../chains/bitcoin/bitcoin.format";
+import type {
+  BitcoinFeePreset,
+  BitcoinFeeQuotes,
+} from "../../chains/bitcoin/bitcoin.types";
 import { AssetIcon } from "../components/AssetIcon";
 import { NetworkIcon } from "../components/NetworkIcon";
 import { SelectNetworkPage } from "../components/SelectNetworkPage";
@@ -48,6 +67,12 @@ const GAS_RESERVES: Record<number, number> = {
   11155111: 0.01,
   // TRX kept back for bandwidth/energy on a native TRX max-send.
   [TRON_MAINNET_CHAIN_ID]: 1,
+  // ~0.0002 BTC kept back to cover the network fee on a native BTC max-send.
+  [BITCOIN_MAINNET_CHAIN_ID]: 0.0002,
+  [BITCOIN_TESTNET_CHAIN_ID]: 0.0002,
+  // ~0.001 SOL kept back for the network fee on a native SOL max-send.
+  [SOLANA_MAINNET_CHAIN_ID]: 0.001,
+  [SOLANA_DEVNET_CHAIN_ID]: 0.001,
 };
 
 // Validate a recipient for the active chain's address family.
@@ -56,6 +81,15 @@ function isValidRecipientForChain(chainId: number, address: string): boolean {
 
   if (isTronChainId(chainId)) {
     return isValidTronAddress(trimmed);
+  }
+
+  if (isBitcoinChainId(chainId)) {
+    const config = getBitcoinConfigByChainId(chainId);
+    return config ? isValidBitcoinAddress(trimmed, config) : false;
+  }
+
+  if (isSolanaChainId(chainId)) {
+    return isValidSolanaAddress(trimmed);
   }
 
   return isAddress(trimmed);
@@ -75,6 +109,11 @@ function getExplorerTransactionUrl(chainId: number, hash: string): string | null
   if (chainId === 11155111) return `https://sepolia.etherscan.io/tx/${hash}`;
   if (chainId === TRON_MAINNET_CHAIN_ID)
     return `https://tronscan.org/#/transaction/${hash}`;
+
+  const bitcoinConfig = getBitcoinConfigByChainId(chainId);
+  if (bitcoinConfig) {
+    return getBitcoinTransactionExplorerUrl(bitcoinConfig, hash);
+  }
 
   return null;
 }
@@ -538,6 +577,19 @@ export function SendPage({
   // The account's TRON address, resolved lazily so it can be recorded as the
   // `from` address in local history for TRON sends.
   const [tronFromAddress, setTronFromAddress] = useState<string | null>(null);
+  // The account's BTC receive address (the `from` shown in the UI / history).
+  const [bitcoinFromAddress, setBitcoinFromAddress] = useState<string | null>(
+    null,
+  );
+  // The account's Solana base58 address (the `from` shown in the UI / history).
+  const [solanaFromAddress, setSolanaFromAddress] = useState<string | null>(
+    null,
+  );
+  // Bitcoin fee presets (sat/vB) + the user's chosen preset.
+  const [bitcoinFeeQuotes, setBitcoinFeeQuotes] =
+    useState<BitcoinFeeQuotes | null>(null);
+  const [bitcoinFeePreset, setBitcoinFeePreset] =
+    useState<BitcoinFeePreset>("normal");
   const [error, setError] = useState<string | null>(null);
   const [sentTransaction, setSentTransaction] =
     useState<SentTransaction | null>(null);
@@ -554,18 +606,59 @@ export function SendPage({
   });
   const normalizedAmount = normalizeAmount(transferAmount);
   const isTron = isTronChainId(currentChainId);
+  const isBitcoin = isBitcoinChainId(currentChainId);
+  const isSolana = isSolanaChainId(currentChainId);
   const recipientIsValid = isValidRecipientForChain(currentChainId, toAddress);
   const amountIsValid = isPositiveAmount(normalizedAmount);
   const amountCanBeConverted = amountMode === "asset" || assetUsdPrice !== null;
   const isWatchOnly = selectedAccount.type === "watch";
+
+  // The display/history "from" address for the active chain. Non-EVM families
+  // resolve a derived address through the service; EVM uses the stored address.
+  const fromAddress = isTron
+    ? tronFromAddress ?? selectedAccount.address
+    : isBitcoin
+      ? bitcoinFromAddress ?? selectedAccount.address
+      : isSolana
+        ? solanaFromAddress ?? selectedAccount.address
+        : selectedAccount.address;
 
   const assetBalance = Number(selectedAsset.formatted);
   const toAddressError =
     toAddressTouched && toAddress.length > 0 && !recipientIsValid
       ? isTron
         ? "Enter a valid TRON address."
-        : "Enter a valid EVM address."
+        : isBitcoin
+          ? "Enter a valid Bitcoin address."
+          : isSolana
+            ? "Enter a valid Solana address."
+            : "Enter a valid EVM address."
       : null;
+
+  // The chosen Bitcoin fee rate (sat/vB) and a representative network-fee
+  // estimate (1 input + 2 outputs). The exact fee is recomputed from real UTXOs
+  // at broadcast time; this is the pre-flight estimate the user reviews.
+  const bitcoinFeeRate = isBitcoin
+    ? bitcoinFeeQuotes?.[bitcoinFeePreset].satPerVb ?? null
+    : null;
+  const bitcoinEstimatedFeeSats =
+    isBitcoin && bitcoinFeeRate != null
+      ? estimateFeeSats(1, 2, bitcoinFeeRate)
+      : null;
+  const bitcoinEstimatedFeeBtc =
+    bitcoinEstimatedFeeSats != null ? satsToBtc(bitcoinEstimatedFeeSats) : null;
+  // amount + estimated fee, in BTC, for the review screen. Guarded so a bad
+  // amount never throws during render.
+  const bitcoinTotalBtc = (() => {
+    if (!isBitcoin || bitcoinEstimatedFeeSats == null || !amountIsValid) {
+      return null;
+    }
+    try {
+      return satsToBtc(btcToSats(normalizedAmount) + bitcoinEstimatedFeeSats);
+    } catch {
+      return null;
+    }
+  })();
   const hasInsufficientBalance =
     amountIsValid && Number(normalizedAmount) > assetBalance;
   const amountError =
@@ -601,31 +694,71 @@ export function SendPage({
       ? "Native"
       : selectedAsset.type === "trc20"
         ? "TRC-20"
-        : "ERC-20";
+        : selectedAsset.type === "spl"
+          ? "SPL"
+          : "ERC-20";
 
   useEffect(() => {
     let active = true;
 
-    if (!isTron) {
+    if (!isTron && !isBitcoin && !isSolana) {
       setTronFromAddress(null);
+      setBitcoinFromAddress(null);
+      setSolanaFromAddress(null);
       return () => {
         active = false;
       };
     }
 
+    // TRON, Bitcoin and Solana resolve their display "from" address through the
+    // wallet service (TRON base58 / BTC receive address / Solana base58).
     void walletService
       .getSelectedReceiveAddress()
       .then((address) => {
-        if (active) setTronFromAddress(address);
+        if (!active) return;
+        setBitcoinFromAddress(isBitcoin ? address : null);
+        setSolanaFromAddress(isSolana ? address : null);
+        setTronFromAddress(isTron ? address : null);
       })
       .catch(() => {
-        if (active) setTronFromAddress(null);
+        if (!active) return;
+        setTronFromAddress(null);
+        setBitcoinFromAddress(null);
+        setSolanaFromAddress(null);
       });
 
     return () => {
       active = false;
     };
-  }, [isTron, currentChainId, selectedAccount.address]);
+  }, [isTron, isBitcoin, isSolana, currentChainId, selectedAccount.address]);
+
+  // Load Bitcoin fee presets (sat/vB) when on a BTC network. getBitcoinFeeQuotes
+  // never throws — it falls back to fixed rates if the provider is down.
+  useEffect(() => {
+    let active = true;
+
+    if (!isBitcoin) {
+      setBitcoinFeeQuotes(null);
+      return () => {
+        active = false;
+      };
+    }
+
+    const config = getBitcoinConfigByChainId(currentChainId);
+    if (!config) {
+      return () => {
+        active = false;
+      };
+    }
+
+    void getBitcoinFeeQuotes(config).then((quotes) => {
+      if (active) setBitcoinFeeQuotes(quotes);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isBitcoin, currentChainId]);
 
   useEffect(() => {
     setSelectedAsset(asset);
@@ -889,6 +1022,8 @@ export function SendPage({
         asset: selectedAsset,
         toAddress: toAddress.trim(),
         amount: normalizedAmount,
+        // Bitcoin only — ignored by EVM/TRON.
+        feeRateSatPerVb: isBitcoin ? bitcoinFeeRate ?? undefined : undefined,
       });
 
       transactionHistoryService.addTransaction({
@@ -902,9 +1037,7 @@ export function SendPage({
         assetName: selectedAsset.name,
         contractAddress: selectedAsset.contractAddress,
         amount: normalizedAmount,
-        fromAddress: isTron
-          ? tronFromAddress ?? selectedAccount.address
-          : selectedAccount.address,
+        fromAddress,
         toAddress: toAddress.trim(),
         explorerUrl: result.explorerUrl,
         createdAt: new Date().toISOString(),
@@ -1128,7 +1261,17 @@ export function SendPage({
                 <input
                   className={`input lg${toAddressError ? " input--error" : ""}`}
                   value={toAddress}
-                  placeholder={isTron ? "T..." : "0x..."}
+                  placeholder={
+                    isTron
+                      ? "T..."
+                      : isBitcoin
+                        ? currentChainId === BITCOIN_TESTNET_CHAIN_ID
+                          ? "tb1q..."
+                          : "bc1q..."
+                        : isSolana
+                          ? "Recipient's Solana address"
+                          : "0x..."
+                  }
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(event) => {
@@ -1231,22 +1374,78 @@ export function SendPage({
             </div>
 
             <section className="row-list send-summary">
-              <MetaRow
-                label="From"
-                value={shortAddress(
-                  isTron
-                    ? tronFromAddress ?? selectedAccount.address
-                    : selectedAccount.address,
-                )}
-              />
+              <MetaRow label="From" value={shortAddress(fromAddress)} />
               <MetaRow label="Network" value={networkLabel} />
-              <MetaRow label="Asset" value={assetStandardLabel} />
+              {!isBitcoin ? (
+                <MetaRow label="Asset" value={assetStandardLabel} />
+              ) : null}
             </section>
+
+            {/* Bitcoin: network-fee preset (sat/vB) instead of gas language. */}
+            {isBitcoin ? (
+              <section className="send-field" style={{ display: "grid", gap: 8 }}>
+                <SectionLabel
+                  left="Network fee"
+                  right={
+                    bitcoinFeeQuotes?.isFallback ? "Estimated (offline)" : undefined
+                  }
+                />
+
+                <div
+                  role="group"
+                  aria-label="Bitcoin fee speed"
+                  style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}
+                >
+                  {(["slow", "normal", "fast"] as BitcoinFeePreset[]).map(
+                    (preset) => {
+                      const quote = bitcoinFeeQuotes?.[preset];
+                      const active = bitcoinFeePreset === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          className={`btn ${active ? "primary" : "secondary"}`}
+                          onClick={() => setBitcoinFeePreset(preset)}
+                          style={{
+                            display: "grid",
+                            gap: 2,
+                            padding: "8px 6px",
+                            textTransform: "capitalize",
+                          }}
+                        >
+                          <strong style={{ fontSize: 13 }}>{preset}</strong>
+                          <small style={{ fontSize: 11, opacity: 0.8 }}>
+                            {quote ? `${quote.satPerVb} sat/vB` : "…"}
+                          </small>
+                        </button>
+                      );
+                    },
+                  )}
+                </div>
+
+                {bitcoinEstimatedFeeBtc ? (
+                  <div className="send-meta-row">
+                    <span className="send-meta-label">Estimated fee</span>
+                    <strong className="send-meta-value">
+                      ≈ {bitcoinEstimatedFeeBtc} BTC
+                      {bitcoinFeeRate != null ? ` · ${bitcoinFeeRate} sat/vB` : ""}
+                    </strong>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
             {isTron ? (
               <Notice title="TRON network resources" tone="warning">
                 TRON uses Bandwidth/Energy. If resources are insufficient, TRX may
                 be burned as network fee.
+              </Notice>
+            ) : null}
+
+            {isSolana ? (
+              <Notice title="Solana network fee" tone="warning">
+                A small amount of SOL is paid as the network fee and kept in
+                reserve. No token approval is required.
               </Notice>
             ) : null}
 
@@ -1317,10 +1516,46 @@ export function SendPage({
                   value={`${normalizedAmount} ${selectedAsset.symbol}`}
                 />
                 <MetaRow label="To" value={shortAddress(toAddress.trim())} />
-                <MetaRow label="From" value={shortAddress(selectedAccount.address)} />
+                <MetaRow label="From" value={shortAddress(fromAddress)} />
+                {isBitcoin && bitcoinEstimatedFeeBtc ? (
+                  <MetaRow
+                    label="Network fee"
+                    value={`≈ ${bitcoinEstimatedFeeBtc} BTC${
+                      bitcoinFeeRate != null ? ` (${bitcoinFeeRate} sat/vB)` : ""
+                    }`}
+                  />
+                ) : null}
+                {isBitcoin && bitcoinTotalBtc ? (
+                  <MetaRow label="Total" value={`≈ ${bitcoinTotalBtc} BTC`} />
+                ) : null}
                 <MetaRow label="Network" value={networkLabel} />
-                <MetaRow label="Asset" value={selectedAsset.symbol} />
+                {!isBitcoin ? (
+                  <MetaRow label="Asset" value={selectedAsset.symbol} />
+                ) : null}
               </div>
+
+              {/* Change handling hidden under details (BTC). */}
+              {isBitcoin ? (
+                <details className="send-change-details">
+                  <summary
+                    style={{
+                      cursor: "pointer",
+                      fontSize: 12,
+                      color: "var(--ink-3)",
+                      padding: "2px 0",
+                    }}
+                  >
+                    Advanced details
+                  </summary>
+                  <div className="row-list" style={{ marginTop: 6 }}>
+                    <MetaRow
+                      label="Change"
+                      value="Returns to your wallet"
+                    />
+                    <MetaRow label="Fee" value="Recalculated from UTXOs at send" />
+                  </div>
+                </details>
+              ) : null}
             </section>
 
             <Notice title="Check carefully" tone="warning">
