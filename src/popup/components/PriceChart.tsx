@@ -162,8 +162,10 @@ export function PriceChart({
         // reading levels matters. Toggled per-mode in the data effect below.
         visible: false,
         borderVisible: false,
-        // Generous vertical headroom so the line never touches the edges.
-        scaleMargins: { top: 0.2, bottom: 0.2 },
+        // Soft inner padding only — the plot fills most of the canvas so the
+        // line isn't squeezed into the middle, and the lowest point sits close
+        // to the x-axis labels instead of floating far above them.
+        scaleMargins: { top: 0.1, bottom: 0.1 },
         ticksVisible: false,
       },
       timeScale: {

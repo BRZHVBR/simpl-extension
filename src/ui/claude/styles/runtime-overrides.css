@@ -3624,7 +3624,7 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
   border: 1px solid var(--line) !important;
   border-radius: 18px !important;
   background: var(--bg-surface, #ffffff) !important;
-  padding: 12px 14px 8px !important;
+  padding: 14px 14px 12px !important;
 }
 
 .asset-chart-head {
@@ -3722,12 +3722,13 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
   color: var(--ink-1) !important;
 }
 
-/* Range buttons: cleanly centered on their own row. */
+/* Range buttons: cleanly centered, snug under the chart's x-axis with even
+   spacing above and below so they read as part of the card. */
 .asset-chart-ranges {
   display: flex !important;
   justify-content: center !important;
-  gap: 4px !important;
-  margin-top: 12px !important;
+  gap: 6px !important;
+  margin-top: 6px !important;
 }
 
 /* Chart type: a quiet, secondary control centered below the range buttons.
@@ -3823,7 +3824,7 @@ html[data-simple-surface="fullscreen"] .popup-app-frame {
 }
 
 .asset-chart-body {
-  margin-top: 8px !important;
+  margin-top: 6px !important;
   position: relative !important;
 }
 
