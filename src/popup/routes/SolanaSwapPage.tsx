@@ -481,6 +481,8 @@ export function SolanaSwapPage({
           swapFromAmount: amount,
           swapToSymbol: toToken.symbol,
           swapToAmount: outFormatted,
+          swapFromMint: fromToken.mint,
+          swapToMint: toToken.mint,
           swapRoute: "Jupiter",
           swapSlippage: formatSlippage(slippageBps),
           ...(order.simplFeeApplied && order.actualFeeBps != null

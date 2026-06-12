@@ -25,6 +25,10 @@ export type TransactionHistoryItem = {
   swapFromAmount?: string;
   swapToSymbol?: string;
   swapToAmount?: string;
+  // Per-leg token mints/contract addresses (non-EVM swaps). Used to match swap
+  // history to an asset by mint rather than symbol, which can collide.
+  swapFromMint?: string;
+  swapToMint?: string;
   swapRoute?: string;
   swapSimpleFee?: string;
   swapNetworkFee?: string;

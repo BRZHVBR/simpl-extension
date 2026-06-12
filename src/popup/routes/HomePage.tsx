@@ -53,6 +53,7 @@ import {
 import { SelectNetworkPage } from "../components/SelectNetworkPage";
 import { getRequiredSolanaConfigByChainId } from "../../chains/solana/solana.config";
 import { loadSplTokenMetadata } from "../../chains/solana/solana.tokens";
+import { SOL_WSOL_MINT } from "../../core/swaps/solana-swap.service";
 import {
   transactionHistoryService,
   type TransactionHistoryItem,
@@ -992,23 +993,44 @@ export function HomePage(props: HomePageProps) {
       "tronAddress" in props.selectedAccount
         ? props.selectedAccount.tronAddress
         : null,
+      "solanaAddress" in props.selectedAccount
+        ? props.selectedAccount.solanaAddress
+        : null,
     ]);
+    const assetSymbol = assetDetails.symbol.toLowerCase();
     const filtered = allItems
       .filter((item) => item.chainId === assetDetails.chainId)
       .filter((item) => {
+        // Swap entries carry per-leg mints (swapFromMint/swapToMint) for
+        // non-EVM swaps. Match by mint first — symbols collide across tokens.
+        // Symbol matching is a last resort, used only when the entry has no
+        // mint info (e.g. EVM swaps, which keep the original symbol-based path).
+        const swapFromMint = item.swapFromMint?.toLowerCase();
+        const swapToMint = item.swapToMint?.toLowerCase();
+        const hasSwapMintInfo = swapFromMint != null || swapToMint != null;
+        const matchesSwapSymbol =
+          item.swapFromSymbol?.toLowerCase() === assetSymbol ||
+          item.swapToSymbol?.toLowerCase() === assetSymbol;
+
         if (assetDetails.type === "native") {
+          // Native SOL swaps reference the wrapped-SOL mint on their leg.
+          const nativeMint = SOL_WSOL_MINT.toLowerCase();
+          const matchesNativeMint =
+            swapFromMint === nativeMint || swapToMint === nativeMint;
           return (
             item.assetType === "native" ||
-            item.swapFromSymbol?.toLowerCase() === assetDetails.symbol.toLowerCase() ||
-            item.swapToSymbol?.toLowerCase() === assetDetails.symbol.toLowerCase()
+            matchesNativeMint ||
+            (!hasSwapMintInfo && matchesSwapSymbol)
           );
         }
+
         if (!assetDetails.contractAddress) return false;
-        const addr = assetDetails.contractAddress.toLowerCase();
+        const mint = assetDetails.contractAddress.toLowerCase();
         return (
-          item.contractAddress?.toLowerCase() === addr ||
-          item.swapFromSymbol?.toLowerCase() === assetDetails.symbol.toLowerCase() ||
-          item.swapToSymbol?.toLowerCase() === assetDetails.symbol.toLowerCase()
+          item.contractAddress?.toLowerCase() === mint ||
+          swapFromMint === mint ||
+          swapToMint === mint ||
+          (!hasSwapMintInfo && matchesSwapSymbol)
         );
       })
       .slice(0, 5);
