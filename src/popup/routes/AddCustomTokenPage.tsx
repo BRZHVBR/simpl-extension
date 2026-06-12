@@ -16,6 +16,8 @@ import {
 } from "../../core/networks/chain-registry";
 import { isValidTronAddress } from "../../chains/tron/tron.address";
 import { isValidSolanaAddress } from "../../chains/solana/solana.address";
+import { getRequiredSolanaConfigByChainId } from "../../chains/solana/solana.config";
+import { loadSplTokenPreview } from "../../chains/solana/solana.tokens";
 import { walletService } from "../../core/wallet/wallet.service";
 import { NetworkIcon } from "../components/NetworkIcon";
 import { AssetIcon } from "../components/AssetIcon";
@@ -256,15 +258,42 @@ export function AddCustomTokenPage({
       return;
     }
 
-    // The on-chain token preview reader is EVM-only (ethers JsonRpcProvider +
-    // ERC-20 ABIs). For Solana the mint format is valid, but reading SPL mint
-    // metadata isn't wired into this screen yet — surface a clear chain-specific
-    // message instead of running EVM logic (which would throw a misleading EVM
-    // error). Never silently no-op.
+    // Solana uses its own SPL reader (the EVM loader below is ethers-only). It
+    // reads the mint's on-chain decimals + the account's SPL balance via the
+    // Solana adapter. The base58 mint is passed verbatim (never lowercased).
     if (isSolana) {
-      setError(
-        "This mint address is valid, but importing SPL tokens from this screen isn’t supported yet. Solana token import is coming soon.",
-      );
+      setLoadingPreview(true);
+      try {
+        const config = getRequiredSolanaConfigByChainId(chainId);
+        const ownerSolanaAddress =
+          "solanaAddress" in selectedAccount
+            ? selectedAccount.solanaAddress ?? null
+            : null;
+
+        const sol = await loadSplTokenPreview(
+          config,
+          ownerSolanaAddress,
+          cleanTokenAddress,
+        );
+
+        setPreview({
+          chainId,
+          // Base58 mint stored verbatim. The TokenPreview type is typed for EVM
+          // (`0x…`), but nothing in the Solana path treats it as an EVM address.
+          address: sol.mint as `0x${string}`,
+          symbol: sol.symbol,
+          name: sol.name,
+          decimals: sol.decimals,
+          balanceRaw: sol.rawAmount.toString(),
+          balanceFormatted: sol.formatted,
+          logoUrl: sol.logoUrl,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setLoadingPreview(false);
+      }
       return;
     }
 
@@ -298,6 +327,8 @@ export function AddCustomTokenPage({
         symbol: preview.symbol,
         name: preview.name,
         decimals: preview.decimals,
+        // Persist the resolved logo URL (when any) so the asset list shows it.
+        ...(preview.logoUrl ? { logoURI: preview.logoUrl } : {}),
         createdAt: new Date().toISOString(),
       });
 
@@ -471,6 +502,7 @@ export function AddCustomTokenPage({
               <div className="row" style={{ cursor: "default" }}>
                 <AssetIcon
                   symbol={preview.symbol}
+                  logoURI={preview.logoUrl ?? undefined}
                   address={preview.address}
                   chainId={preview.chainId}
                   size={38}

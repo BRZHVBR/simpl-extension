@@ -1,6 +1,8 @@
 import { Contract, JsonRpcProvider, getAddress } from "ethers";
 import type { EvmAddress } from "../accounts/derivation";
 import { networkService } from "../networks/network.service";
+import { isSolanaChainId } from "../networks/chain-registry";
+import { isValidSolanaAddress } from "../../chains/solana/solana.address";
 
 const ERC20_METADATA_ABI = [
   "function name() view returns (string)",
@@ -51,6 +53,24 @@ function normalizeTokenAddress(address: string): `0x${string}` {
   return getAddress(address) as `0x${string}`;
 }
 
+// Chain-aware normalization. Solana mints are base58 + case-sensitive, so they
+// are validated and kept verbatim; EVM keeps checksum normalization.
+function normalizeTokenAddressForChain(
+  chainId: number,
+  address: string,
+): `0x${string}` {
+  const trimmed = address.trim();
+
+  if (isSolanaChainId(chainId)) {
+    if (!isValidSolanaAddress(trimmed)) {
+      throw new Error("Invalid Solana token mint address.");
+    }
+    return trimmed as `0x${string}`;
+  }
+
+  return normalizeTokenAddress(trimmed);
+}
+
 export class CustomTokenService {
   getTokensByChainId(chainId: number): CustomToken[] {
     const key = getCustomTokensStorageKey(chainId);
@@ -84,7 +104,10 @@ export class CustomTokenService {
   }
 
   addToken(token: CustomToken): CustomToken[] {
-    const normalizedAddress = normalizeTokenAddress(token.address);
+    const normalizedAddress = normalizeTokenAddressForChain(
+      token.chainId,
+      token.address,
+    );
     const currentTokens = this.getTokensByChainId(token.chainId);
 
     const nextToken: CustomToken = {
@@ -104,7 +127,10 @@ export class CustomTokenService {
   }
 
   removeToken(input: { chainId: number; address: string }): CustomToken[] {
-    const normalizedAddress = normalizeTokenAddress(input.address);
+    const normalizedAddress = normalizeTokenAddressForChain(
+      input.chainId,
+      input.address,
+    );
     const currentTokens = this.getTokensByChainId(input.chainId);
 
     const nextTokens = currentTokens.filter(

@@ -26,6 +26,7 @@ import {
 import type { SolanaActivityItem } from "./solana.types";
 import type { WalletAssetBalance } from "../../core/tokens/token-balance.service";
 import type { TransactionHistoryStatus } from "../../core/transactions/transaction-history.service";
+import { customTokenService } from "../../core/tokens/custom-token.service";
 
 function nativeAssetId(config: SolanaChainConfig): string {
   return `native:${config.chainId}`;
@@ -96,7 +97,46 @@ export async function getSolanaPortfolio(
     tokenAssets = [];
   }
 
-  return [nativeAsset, ...tokenAssets];
+  // Surface imported (custom) SPL tokens the user added on the Add Token screen
+  // even when the account holds none of them — getSplTokenBalances only returns
+  // positive on-chain balances, so a freshly-imported / zero-balance mint would
+  // otherwise never appear. Mints already present on-chain are skipped (the live
+  // balance wins). Base58 mints are compared verbatim (case-sensitive).
+  let importedAssets: WalletAssetBalance[] = [];
+  try {
+    const heldMints = new Set(
+      tokenAssets.map((asset) => asset.contractAddress ?? ""),
+    );
+    importedAssets = customTokenService
+      .getTokensByChainId(config.chainId)
+      .filter((token) => !heldMints.has(token.address))
+      .map((token) => ({
+        id: splAssetId(config, token.address),
+        type: "spl",
+        chainId: config.chainId,
+        chainName: config.name,
+        name: token.name,
+        symbol: token.symbol,
+        decimals: token.decimals,
+        contractAddress: token.address,
+        balanceRaw: "0",
+        formatted: "0",
+        updatedAt,
+        isTransferable: true,
+        visible: true,
+        usdPrice: null,
+        usdValue: null,
+        logoUrl: token.logoURI ?? null,
+        isSpam: false,
+        isVerified: false,
+        source: "custom",
+      }));
+  } catch (error) {
+    console.debug("Solana imported-token merge failed:", error);
+    importedAssets = [];
+  }
+
+  return [nativeAsset, ...tokenAssets, ...importedAssets];
 }
 
 // Native SOL balance in lamports, for the single-balance surfaces.
