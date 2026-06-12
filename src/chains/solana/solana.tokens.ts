@@ -809,6 +809,7 @@ type ParsedTokenAccountInfo = {
     amount?: string;
     decimals?: number;
     uiAmount?: number | null;
+    uiAmountString?: string | null;
   };
 };
 
@@ -836,43 +837,119 @@ export async function getSplTokenBalances(
 
   const owner = new PublicKey(address);
 
-  const response = await withSolanaRead(config, (connection) =>
-    connection.getParsedTokenAccountsByOwner(owner, {
-      programId: TOKEN_PROGRAM_ID,
-    }),
+  // Scan BOTH token programs: classic SPL Token AND Token-2022. Many newer mints
+  // (e.g. pump.fun-style tokens like GIGA) are Token-2022, and their token
+  // accounts are NOT returned when filtering by the legacy program id — that
+  // omission is exactly what made held Token-2022 balances read as 0.
+  const programIds = [TOKEN_PROGRAM_ID, new PublicKey(TOKEN_2022_PROGRAM_ID)];
+  const responses = await withSolanaRead(config, (connection) =>
+    Promise.all(
+      programIds.map((programId) =>
+        connection.getParsedTokenAccountsByOwner(owner, { programId }),
+      ),
+    ),
   );
 
   const balances: SolanaTokenBalance[] = [];
 
-  for (const entry of response.value) {
-    const info = readParsedInfo(entry);
-    const mint = info?.mint;
-    const amountRaw = info?.tokenAmount?.amount;
-    const decimals = info?.tokenAmount?.decimals;
+  for (const response of responses) {
+    for (const entry of response.value) {
+      const info = readParsedInfo(entry);
+      const mint = info?.mint;
+      const amountRaw = info?.tokenAmount?.amount;
+      const decimals = info?.tokenAmount?.decimals;
 
-    if (!mint || amountRaw == null || decimals == null) {
-      continue;
+      if (!mint || amountRaw == null || decimals == null) {
+        continue;
+      }
+
+      const rawAmount = BigInt(amountRaw);
+
+      if (!options.includeZero && rawAmount <= 0n) {
+        continue;
+      }
+
+      const metadata = resolveTokenMetadata(mint);
+
+      balances.push({
+        mint,
+        symbol: metadata.symbol,
+        name: metadata.name,
+        decimals,
+        rawAmount,
+        formatted: formatTokenAmount(rawAmount, decimals),
+        logoUrl: metadata.logoUrl,
+        isVerified: metadata.isVerified,
+      });
     }
-
-    const rawAmount = BigInt(amountRaw);
-
-    if (!options.includeZero && rawAmount <= 0n) {
-      continue;
-    }
-
-    const metadata = resolveTokenMetadata(mint);
-
-    balances.push({
-      mint,
-      symbol: metadata.symbol,
-      name: metadata.name,
-      decimals,
-      rawAmount,
-      formatted: formatTokenAmount(rawAmount, decimals),
-      logoUrl: metadata.logoUrl,
-      isVerified: metadata.isVerified,
-    });
   }
 
   return balances;
+}
+
+// Real on-chain balance for ONE specific mint owned by `ownerAddress`, resolved
+// by a direct mint-filtered lookup. Because the query is keyed by mint (not by
+// programId) it works for BOTH legacy SPL Token and Token-2022 accounts, and
+// catches imported tokens the bulk scan missed. Returns null when the owner has
+// no token account for the mint. Throws only on a true RPC failure (after all
+// endpoints) so the caller can isolate it per-mint.
+export type SplMintBalance = {
+  rawAmount: bigint;
+  decimals: number;
+  uiAmountString: string;
+};
+
+export async function getSplTokenBalanceByMint(
+  config: SolanaChainConfig,
+  ownerAddress: string,
+  mint: string,
+): Promise<SplMintBalance | null> {
+  if (!isValidSolanaAddress(ownerAddress) || !isValidSolanaAddress(mint)) {
+    return null;
+  }
+
+  const owner = new PublicKey(ownerAddress);
+  const mintKey = new PublicKey(mint);
+
+  const response = await withSolanaRead(config, (connection) => {
+    if (isDev) {
+      // Q6: which RPC endpoint answered the direct lookup.
+      console.debug("[SolanaPortfolioDebug] direct lookup RPC", {
+        owner: ownerAddress,
+        mint,
+        endpoint: connection.rpcEndpoint,
+      });
+    }
+    return connection.getParsedTokenAccountsByOwner(owner, { mint: mintKey });
+  });
+
+  if (isDev) {
+    // Q7 (raw): how many token accounts the direct lookup returned.
+    console.debug("[SolanaPortfolioDebug] direct lookup accounts", {
+      mint,
+      accounts: response.value.length,
+    });
+  }
+
+  if (response.value.length === 0) return null;
+
+  // An owner can in theory hold several token accounts for one mint — sum them.
+  let rawAmount = 0n;
+  let decimals: number | null = null;
+  let uiAmountString = "0";
+  for (const entry of response.value) {
+    const info = readParsedInfo(entry);
+    const amount = info?.tokenAmount?.amount;
+    if (amount != null) rawAmount += BigInt(amount);
+    if (decimals == null && info?.tokenAmount?.decimals != null) {
+      decimals = info.tokenAmount.decimals;
+    }
+    if (info?.tokenAmount?.uiAmountString != null) {
+      uiAmountString = info.tokenAmount.uiAmountString;
+    }
+  }
+
+  if (decimals == null) return null;
+
+  return { rawAmount, decimals, uiAmountString };
 }

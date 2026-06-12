@@ -39,6 +39,7 @@ import {
   type SolanaChainConfig,
 } from "../../chains/solana/solana.config";
 import { deriveSolanaAccountFromMnemonic } from "../../chains/solana/solana.derivation";
+import { signSolanaSwapTransaction } from "../../chains/solana/solana.swap";
 import { lamportsToSol } from "../../chains/solana/solana.format";
 import {
   getSolanaActivity,
@@ -2148,6 +2149,40 @@ export class WalletService {
       recipient: input.toAddress,
       fromSecretKey: material.secretKey,
     });
+  }
+
+  // Sign a Simpl-API/Jupiter swap transaction locally for the selected Solana
+  // account. The backend builds the UNSIGNED transaction (base64); this signs it
+  // with the account's Solana keypair and returns the signed base64 transaction
+  // for /v1/solana/swap/execute. The secret key never leaves the wallet service.
+  async signSelectedSolanaSwapTransaction(input: {
+    transactionBase64: string;
+    password?: string;
+  }): Promise<{ signedTransaction: string; address: string }> {
+    const walletState = await this.storage.getWalletState();
+    const selectedAccount = this.getRequiredSelectedAccount(walletState);
+
+    if (selectedAccount.type === "watch") {
+      throw new Error("Watch-only wallet cannot sign transactions.");
+    }
+    if (!isSolanaChainId(walletState.selectedChainId)) {
+      throw new Error("Solana swaps require a Solana network.");
+    }
+
+    const payload = await this.getDecryptedPayloadForSensitiveOperation(
+      input.password,
+    );
+    const material = this.deriveSolanaMaterialForAccount(
+      selectedAccount,
+      payload,
+    );
+
+    const signedTransaction = signSolanaSwapTransaction({
+      transactionBase64: input.transactionBase64,
+      fromSecretKey: material.secretKey,
+    });
+
+    return { signedTransaction, address: material.address };
   }
 
   private async persistSolanaAddress(

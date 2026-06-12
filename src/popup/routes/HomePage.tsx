@@ -721,9 +721,46 @@ export function HomePage(props: HomePageProps) {
       setPortfolioStatus("fresh");
       setPortfolioError(null);
 
+      // Keep an open Asset Detail in sync with the fresh portfolio balance so it
+      // never shows a stale 0 after a successful refresh (the detail holds its
+      // own snapshot of the asset). Balance/labels come from the fresh asset;
+      // an in-session enriched logo is preserved if the fresh one lacks it.
+      setAssetDetails((prev) => {
+        if (!prev) return prev;
+        const fresh = result.assets.find((a) => a.id === prev.id);
+        if (!fresh) return prev;
+        return {
+          ...prev,
+          balanceRaw: fresh.balanceRaw,
+          formatted: fresh.formatted,
+          decimals: fresh.decimals,
+          name: fresh.name,
+          symbol: fresh.symbol,
+          usdPrice: fresh.usdPrice,
+          usdValue: fresh.usdValue,
+          logoUrl: fresh.logoUrl ?? prev.logoUrl,
+        };
+      });
+
       retryAttemptRef.current = 0;
 
       writeCachedPortfolio(cacheKey, result.assets);
+
+      if (import.meta.env.DEV) {
+        // Q12: the SPL assets persisted to the selected-portfolio cache.
+        console.debug("[SolanaPortfolioDebug] cached portfolio SPL assets", {
+          assets: result.assets
+            .filter((a) => a.type === "spl")
+            .map((a) => ({
+              id: a.id,
+              mint: a.contractAddress,
+              symbol: a.symbol,
+              balanceRaw: a.balanceRaw,
+              formatted: a.formatted,
+            })),
+        });
+      }
+
       scheduleRegularRefresh();
     } catch (error) {
       if (!mountedRef.current || requestIdRef.current !== requestId) return;
@@ -1425,13 +1462,15 @@ export function HomePage(props: HomePageProps) {
       !showMarketFallback &&
       chartStatus !== "idle";
 
-    // Swap routes through the EVM-only 0x proxy. For imported tokens on non-EVM
-    // chains (Solana SPL, TRON, BTC) it can't execute, so hide the action with a
-    // short note rather than offering a button that dead-ends. Native assets keep
-    // their existing behavior (governed solely by isTestnetAsset) untouched.
+    // Swap is supported on EVM (0x proxy) and Solana (Simpl API / Jupiter,
+    // SolanaSwapPage) — for native AND SPL/ERC-20 tokens. Other families (TRON,
+    // BTC) have no token swap yet, so their imported tokens hide the action with
+    // a short note. Native assets keep their existing behavior. Testnets never
+    // swap.
+    const swapFamily = getChainFamily(asset.chainId);
+    const swapSupportedFamily = swapFamily === "evm" || swapFamily === "solana";
     const swapAvailable =
-      !isTestnetAsset &&
-      (isNative || getChainFamily(asset.chainId) === "evm");
+      !isTestnetAsset && (isNative || swapSupportedFamily);
     const showSwapUnavailableNote =
       !isNative && !isTestnetAsset && !swapAvailable && !isWatchOnlyAccount;
 

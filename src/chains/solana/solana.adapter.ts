@@ -14,10 +14,11 @@ import {
   type SolanaChainConfig,
 } from "./solana.config";
 import { isValidSolanaAddress } from "./solana.address";
-import { solToLamports } from "./solana.format";
+import { solToLamports, formatTokenAmount } from "./solana.format";
 import { solanaErrorFor } from "./solana.errors";
-import { getSolBalance, getSolBalanceLamports } from "./solana.balance";
-import { getSplTokenBalances } from "./solana.tokens";
+import { getSolBalanceLamports } from "./solana.balance";
+import { resolveTokenMetadata } from "./solana.tokens";
+import { fetchSolanaPortfolio } from "./solana.portfolio-api";
 import {
   getSolanaTransactionStatus,
   loadSolanaActivity,
@@ -28,6 +29,8 @@ import type { WalletAssetBalance } from "../../core/tokens/token-balance.service
 import type { TransactionHistoryStatus } from "../../core/transactions/transaction-history.service";
 import { customTokenService } from "../../core/tokens/custom-token.service";
 
+const isDev = Boolean((import.meta.env as { DEV?: boolean } | undefined)?.DEV);
+
 function nativeAssetId(config: SolanaChainConfig): string {
   return `native:${config.chainId}`;
 }
@@ -36,16 +39,77 @@ function splAssetId(config: SolanaChainConfig, mint: string): string {
   return `spl:${config.chainId}:${mint}`;
 }
 
-// Build the Solana portfolio: native SOL plus any SPL token balances. A failed
-// SPL read degrades to SOL-only so one slow/failed token call never blanks the
-// screen; a failed native read throws (the wallet service surfaces it).
+// Build the Solana portfolio (native SOL + SPL balances) via the Simpl API
+// Solana portfolio gateway. Direct browser calls to public Solana RPC are
+// blocked/rate-limited from the extension origin (400/403/cancelled), which made
+// imported SPL balances read 0 — so all balance READS now go through the
+// gateway. The owner is derived locally (passed in) and the user's imported mints
+// are sent so the backend resolves them too. Local signing/send/swap is
+// untouched. Base58 owner/mints are sent verbatim (never lowercased).
 export async function getSolanaPortfolio(
   config: SolanaChainConfig,
   address: string,
 ): Promise<WalletAssetBalance[]> {
   const updatedAt = new Date().toISOString();
-  const balance = await getSolBalance(address, config);
 
+  // Local custom-token metadata, keyed by mint (verbatim base58). Enriches the
+  // backend balances with the user's imported name/symbol/logo, and supplies the
+  // mint list the gateway should resolve.
+  const customByMint = new Map<
+    string,
+    { logoURI?: string; name: string; symbol: string; decimals: number }
+  >();
+  try {
+    for (const token of customTokenService.getTokensByChainId(config.chainId)) {
+      customByMint.set(token.address, {
+        logoURI: token.logoURI,
+        name: token.name,
+        symbol: token.symbol,
+        decimals: token.decimals,
+      });
+    }
+  } catch (error) {
+    console.debug("Solana custom-token read failed:", error);
+  }
+  const importedMints = Array.from(customByMint.keys());
+
+  if (isDev) {
+    console.debug("[SolanaPortfolioDebug] request", {
+      owner: address,
+      chainId: config.chainId,
+      network: config.name,
+      importedMints,
+    });
+  }
+
+  // One gateway call replaces the native-SOL read + bulk SPL scan + per-mint
+  // direct lookups that previously hit public RPC directly.
+  const portfolio = await fetchSolanaPortfolio({
+    owner: address,
+    importedMints,
+  });
+
+  if (isDev) {
+    console.debug("[SolanaPortfolioDebug] gateway response", {
+      owner: portfolio.owner,
+      nativeLamports: portfolio.nativeSol?.lamports,
+      tokenCount: portfolio.tokens?.length ?? 0,
+      tokens: (portfolio.tokens ?? []).map((t) => ({
+        mint: t.mint,
+        amount: t.amount,
+        decimals: t.decimals,
+        uiAmountString: t.uiAmountString,
+        source: t.source,
+      })),
+      missingImportedMints: portfolio.missingImportedMints ?? [],
+      warnings: portfolio.warnings ?? [],
+      source: portfolio.source,
+    });
+  }
+
+  // ── Native SOL (from the gateway, not a direct RPC call) ──
+  const nativeLamports = portfolio.nativeSol?.lamports ?? "0";
+  const nativeDecimals = portfolio.nativeSol?.decimals ?? config.decimals;
   const nativeAsset: WalletAssetBalance = {
     id: nativeAssetId(config),
     type: "native",
@@ -55,8 +119,10 @@ export async function getSolanaPortfolio(
     symbol: config.symbol,
     decimals: config.decimals,
     contractAddress: null,
-    balanceRaw: balance.raw.toString(),
-    formatted: balance.formatted,
+    balanceRaw: nativeLamports,
+    formatted:
+      portfolio.nativeSol?.uiAmountString ??
+      formatTokenAmount(nativeLamports, nativeDecimals),
     updatedAt,
     isTransferable: true,
     visible: true,
@@ -68,101 +134,93 @@ export async function getSolanaPortfolio(
     source: "native",
   };
 
-  // Stored custom-token metadata keyed by mint (base58, case-sensitive). Used to
-  // backfill the logo (and name/symbol) for tokens the user imported but also
-  // holds on-chain — the on-chain scan resolves only the local known list, so
-  // without this an imported token's saved logoURI would be lost once it has a
-  // balance (the zero-balance import path below already maps logoURI → logoUrl).
-  const customByMint = new Map<string, { logoURI?: string; name: string; symbol: string }>();
-  try {
-    for (const token of customTokenService.getTokensByChainId(config.chainId)) {
-      customByMint.set(token.address, {
-        logoURI: token.logoURI,
-        name: token.name,
-        symbol: token.symbol,
-      });
-    }
-  } catch (error) {
-    console.debug("Solana custom-token read failed:", error);
-  }
+  // ── Held SPL tokens (gateway on-chain balances win over any zero fallback) ──
+  const heldMints = new Set<string>();
+  const tokenAssets: WalletAssetBalance[] = [];
+  for (const token of portfolio.tokens ?? []) {
+    if (!token?.mint) continue;
+    const custom = customByMint.get(token.mint);
+    const known = resolveTokenMetadata(token.mint);
+    const decimals = token.decimals;
+    const formatted =
+      token.uiAmountString ?? formatTokenAmount(token.amount ?? "0", decimals);
 
-  let tokenAssets: WalletAssetBalance[] = [];
-  try {
-    const tokens = await getSplTokenBalances(address, config);
-    tokenAssets = tokens.map((token) => {
-      const custom = customByMint.get(token.mint);
-      return {
-        id: splAssetId(config, token.mint),
-        type: "spl",
-        chainId: config.chainId,
-        chainName: config.name,
-        // Prefer the user-imported name/symbol over a shortened-mint fallback
-        // for unknown tokens; verified known tokens keep their registry labels.
-        name: !token.isVerified && custom?.name ? custom.name : token.name,
-        symbol: !token.isVerified && custom?.symbol ? custom.symbol : token.symbol,
-        decimals: token.decimals,
-        contractAddress: token.mint,
-        balanceRaw: token.rawAmount.toString(),
-        formatted: token.formatted,
-        updatedAt,
-        isTransferable: true,
-        visible: true,
-        usdPrice: null,
-        usdValue: null,
-        // Known-list logo wins; otherwise fall back to the imported logoURI.
-        logoUrl: token.logoUrl ?? custom?.logoURI ?? null,
-        isSpam: false,
-        isVerified: token.isVerified,
-        // A held token the user explicitly imported is "custom" (so it stays
-        // removable/consistent with the zero-balance import path).
-        source: token.isVerified ? "registry" : custom ? "custom" : "discovery",
-      };
+    heldMints.add(token.mint);
+    tokenAssets.push({
+      id: splAssetId(config, token.mint),
+      type: "spl",
+      chainId: config.chainId,
+      chainName: config.name,
+      // Known registry label wins; otherwise the user-imported label; else mint.
+      name: known.isVerified ? known.name : custom?.name ?? known.name,
+      symbol: known.isVerified ? known.symbol : custom?.symbol ?? known.symbol,
+      decimals,
+      contractAddress: token.mint,
+      balanceRaw: token.amount ?? "0",
+      formatted,
+      updatedAt,
+      isTransferable: true,
+      visible: true,
+      usdPrice: null,
+      usdValue: null,
+      // Known-list logo wins; otherwise the imported logoURI.
+      logoUrl: known.logoUrl ?? custom?.logoURI ?? null,
+      isSpam: false,
+      isVerified: known.isVerified,
+      source: known.isVerified ? "registry" : custom ? "custom" : "discovery",
     });
-  } catch (error) {
-    console.debug("Solana SPL balance read failed:", error);
-    tokenAssets = [];
   }
 
-  // Surface imported (custom) SPL tokens the user added on the Add Token screen
-  // even when the account holds none of them — getSplTokenBalances only returns
-  // positive on-chain balances, so a freshly-imported / zero-balance mint would
-  // otherwise never appear. Mints already present on-chain are skipped (the live
-  // balance wins). Base58 mints are compared verbatim (case-sensitive).
-  let importedAssets: WalletAssetBalance[] = [];
-  try {
-    const heldMints = new Set(
-      tokenAssets.map((asset) => asset.contractAddress ?? ""),
-    );
-    importedAssets = customTokenService
-      .getTokensByChainId(config.chainId)
-      .filter((token) => !heldMints.has(token.address))
-      .map((token) => ({
-        id: splAssetId(config, token.address),
-        type: "spl",
-        chainId: config.chainId,
-        chainName: config.name,
-        name: token.name,
-        symbol: token.symbol,
-        decimals: token.decimals,
-        contractAddress: token.address,
-        balanceRaw: "0",
-        formatted: "0",
-        updatedAt,
-        isTransferable: true,
-        visible: true,
-        usdPrice: null,
-        usdValue: null,
-        logoUrl: token.logoURI ?? null,
-        isSpam: false,
-        isVerified: false,
-        source: "custom",
-      }));
-  } catch (error) {
-    console.debug("Solana imported-token merge failed:", error);
-    importedAssets = [];
+  // ── Imported tokens the gateway did NOT return as held → zero balance ──
+  // Covers missingImportedMints and any imported mint absent from `tokens`.
+  const importedAssets: WalletAssetBalance[] = [];
+  for (const [mint, custom] of customByMint.entries()) {
+    if (heldMints.has(mint)) continue;
+    importedAssets.push({
+      id: splAssetId(config, mint),
+      type: "spl",
+      chainId: config.chainId,
+      chainName: config.name,
+      name: custom.name,
+      symbol: custom.symbol,
+      decimals: custom.decimals,
+      contractAddress: mint,
+      balanceRaw: "0",
+      formatted: "0",
+      updatedAt,
+      isTransferable: true,
+      visible: true,
+      usdPrice: null,
+      usdValue: null,
+      logoUrl: custom.logoURI ?? null,
+      isSpam: false,
+      isVerified: false,
+      source: "custom",
+    });
   }
 
-  return [nativeAsset, ...tokenAssets, ...importedAssets];
+  const finalAssets = [nativeAsset, ...tokenAssets, ...importedAssets];
+
+  if (isDev) {
+    console.debug("[SolanaPortfolioDebug] final returned SPL assets", {
+      assets: finalAssets
+        .filter((a) => a.type === "spl")
+        .map((a) => ({
+          id: a.id,
+          mint: a.contractAddress,
+          symbol: a.symbol,
+          balanceRaw: a.balanceRaw,
+          formatted: a.formatted,
+          decimals: a.decimals,
+          source: a.source,
+          finalSource: heldMints.has(a.contractAddress ?? "")
+            ? "held-gateway"
+            : "imported-zero-fallback",
+        })),
+    });
+  }
+
+  return finalAssets;
 }
 
 // Native SOL balance in lamports, for the single-balance surfaces.

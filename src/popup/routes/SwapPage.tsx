@@ -38,6 +38,7 @@ import {
 } from "../../core/networks/chain-registry";
 import { AssetIcon } from "../components/AssetIcon";
 import { SelectNetworkPage } from "../components/SelectNetworkPage";
+import { SolanaSwapPage } from "./SolanaSwapPage";
 import "./SwapPage.css";
 
 type SwapPageProps = {
@@ -2385,32 +2386,18 @@ if (selectedAccount && fromToken && toToken) {
     );
   }
 
-  // Solana is not part of the EVM 0x swap flow. Gate it with a clear notice
-  // instead of letting the EVM quote/approval path run for a Solana network.
+  // Solana is not part of the EVM 0x swap flow — it has its own Simpl-API
+  // (Jupiter-backed) swap screen. Route it there instead of the EVM path.
   if (isSolanaChainId(selectedChainId)) {
     return (
-      <div className="ext-popup swap-page" data-screen-label="Swap – Solana">
-        <div className="bar-top">
-          <button className="icbtn" type="button" onClick={onBack} aria-label="Back">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-1)" }}>
-            Swap
-          </div>
-        </div>
-        <div className="screen-body watch-only-guard">
-          <div className="watch-only-guard__title">Solana swaps are coming soon</div>
-          <div className="watch-only-guard__text">
-            Token swaps are not yet available on Solana. Switch to a supported
-            network to swap.
-          </div>
-          <button className="btn secondary lg full" type="button" onClick={onBack}>
-            Back to wallet
-          </button>
-        </div>
-      </div>
+      <SolanaSwapPage
+        selectedAccount={selectedAccount}
+        walletState={walletState}
+        selectedChainId={selectedChainId}
+        onBack={onBack}
+        onSwapCompleted={onSwapCompleted}
+        initialToAsset={initialToAsset}
+      />
     );
   }
 
