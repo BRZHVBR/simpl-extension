@@ -361,10 +361,29 @@ export function TransactionHistoryPage({
       return;
     }
 
-    const liveIds = new Set(liveItems.map((item) => item.id));
+    // A swap shows up on-chain as a plain transfer under the same signature as
+    // our local "Swapped A → B" entry. Keep the richer local swap row (so it
+    // doesn't collapse to a bare "Sent SOL"), but adopt the live confirmation
+    // status when the matching on-chain entry is available. Non-swap local
+    // entries are still superseded by their live counterpart as before.
+    const liveById = new Map(liveItems.map((item) => [item.id, item]));
+    const localSwapIds = new Set(
+      localItems
+        .filter((item) => item.direction === "swap")
+        .map((item) => item.id),
+    );
+
     const merged = [
-      ...liveItems,
-      ...localItems.filter((item) => !liveIds.has(item.id)),
+      ...liveItems.filter((item) => !localSwapIds.has(item.id)),
+      ...localItems
+        .filter((item) => item.direction === "swap" || !liveById.has(item.id))
+        .map((item) => {
+          if (item.direction !== "swap") return item;
+          const live = liveById.get(item.id);
+          return live && live.status !== item.status
+            ? { ...item, status: live.status }
+            : item;
+        }),
     ].sort(
       (a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
