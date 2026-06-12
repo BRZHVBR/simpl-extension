@@ -121,6 +121,22 @@ function formatSlippage(bps: number): string {
   return `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 2)}%`;
 }
 
+// Format a fee in basis points as a trimmed percent (50 → "0.5%", 100 → "1%").
+function formatFeeBps(bps: number): string {
+  return `${Number((bps / 100).toFixed(2))}%`;
+}
+
+// Resolve which fee (basis points) to display, preferring the actual fee the
+// backend applied and falling back to the requested one. Returns null when no
+// fee is present so the row can be omitted entirely. Referral account and fee
+// mint are deliberately ignored — they are never surfaced to the user.
+function resolveFeeBps(order: SolanaSwapOrder | null): number | null {
+  if (!order) return null;
+  if (typeof order.actualFeeBps === "number") return order.actualFeeBps;
+  if (typeof order.requestedFeeBps === "number") return order.requestedFeeBps;
+  return null;
+}
+
 function assetToSolToken(asset: WalletAssetBalance): SolToken {
   const isNative = asset.type === "native";
   return {
@@ -733,15 +749,32 @@ export function SolanaSwapPage({
               <strong>{formatSlippage(slippageBps)}</strong>
             </div>
             <div className="swap-quote-row swap-quote-row--route">
-              <span>Provider</span>
-              <strong>Jupiter</strong>
+              <span>Route</span>
+              <strong>Jupiter Ultra</strong>
             </div>
-            {order.simplFeeApplied && order.actualFeeBps != null ? (
+            {resolveFeeBps(order) != null ? (
               <div className="swap-quote-row">
                 <span>Simpl fee</span>
-                <strong>{(order.actualFeeBps / 100).toFixed(2)}%</strong>
+                <strong>
+                  {formatFeeBps(resolveFeeBps(order) as number)}
+                  {order.simplFeeApplied ? (
+                    <span className="swap-fee-tag swap-fee-tag--ok">Included</span>
+                  ) : (order.requestedFeeBps ?? 0) > 0 ? (
+                    <span className="swap-fee-tag swap-fee-tag--warn">Not applied</span>
+                  ) : null}
+                </strong>
               </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {/* Fee transparency — subtle, premium, non-blocking. Never exposes the
+            referral account, fee mint or any raw/debug field. */}
+        {step === "review" && order ? (
+          <div className="swap-fee-hint">
+            {!order.simplFeeApplied && (order.requestedFeeBps ?? 0) > 0
+              ? "Fee was not applied for this route. Fees are included in the quoted amount."
+              : "Fees are included in the quoted amount. Powered by Jupiter."}
           </div>
         ) : null}
 

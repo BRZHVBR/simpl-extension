@@ -447,6 +447,37 @@
   white-space: nowrap;
 }
 
+/* Solana swap fee transparency — subtle inline tag + helper line. Scoped to
+   new class names so EVM swap styling is untouched. */
+.swap-fee-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+  letter-spacing: 0.01em;
+}
+
+.swap-fee-tag--ok {
+  background: rgba(93, 143, 63, 0.12);
+  color: #4f7f35;
+}
+
+.swap-fee-tag--warn {
+  background: rgba(176, 124, 30, 0.12);
+  color: #946612;
+}
+
+.swap-fee-hint {
+  margin-top: -2px;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3, #6f6f68);
+}
+
 /* ============================================================
    STATUS NOTICES
    ============================================================ */
