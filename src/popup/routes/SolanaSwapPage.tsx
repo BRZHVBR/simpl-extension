@@ -29,10 +29,16 @@ import {
   USDC_SOLANA_MINT,
   type SolanaSwapOrder,
 } from "../../core/swaps/solana-swap.service";
+import { LIFI_SOLANA_CHAIN_ID } from "../../core/bridge/lifi-bridge.service";
 import { AssetIcon } from "../components/AssetIcon";
 import { TokenWithChainBadge } from "../components/TokenWithChainBadge";
 import { SwapHeader } from "../components/SwapHeader";
 import { SwapRouteNotice } from "../components/SwapRouteNotice";
+import {
+  CrossChainTokenPicker,
+  type PickerToken,
+} from "../components/CrossChainTokenPicker";
+import { BridgePage } from "./BridgePage";
 import "./SwapPage.css";
 
 type SolanaSwapPageProps = {
@@ -180,7 +186,14 @@ export function SolanaSwapPage({
   const [toToken, setToToken] = useState<SolToken | null>(null);
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippageBps] = useState(50);
-  const [picker, setPicker] = useState<"from" | "to" | null>(null);
+  // FROM uses the Solana-only token list ("from"); TO uses the shared
+  // cross-chain picker (toPickerOpen) so a receive token on another network can
+  // reshape the route into a Solana → EVM bridge.
+  const [picker, setPicker] = useState<"from" | null>(null);
+  const [toPickerOpen, setToPickerOpen] = useState(false);
+  // When the user picks a receive token on an EVM chain, we hand off to the
+  // LI.FI bridge flow (Solana source). null = stay in the Jupiter same-chain UI.
+  const [bridgeTo, setBridgeTo] = useState<PickerToken | null>(null);
 
   const [step, setStep] = useState<Step>("form");
   const [order, setOrder] = useState<SolanaSwapOrder | null>(null);
@@ -316,16 +329,46 @@ export function SolanaSwapPage({
     if (step === "review") setStep("form");
   }
 
+  // FROM picker (Solana-only list).
   function handleSelectToken(token: SolToken) {
     if (picker === "from") {
       if (toToken && token.mint === toToken.mint) setToToken(fromToken);
       setFromToken(token);
-    } else if (picker === "to") {
-      if (fromToken && token.mint === fromToken.mint) setFromToken(toToken);
-      setToToken(token);
     }
     setPicker(null);
     resetOrder();
+  }
+
+  // TO picker (shared cross-chain picker). A Solana-mainnet pick stays in the
+  // Jupiter same-chain flow; an EVM pick hands off to the LI.FI bridge flow
+  // (Solana → EVM) — never Jupiter, never 0x.
+  function handlePickTo(p: PickerToken) {
+    setToPickerOpen(false);
+    if (p.chainId === LIFI_SOLANA_CHAIN_ID) {
+      // Native SOL has no EVM-style zero address, so the picker reports it as
+      // non-native; detect it by symbol and use the wSOL mint Jupiter expects.
+      const isSol = p.symbol.toUpperCase() === "SOL";
+      const picked: SolToken = {
+        id: `cc:${p.chainId}:${p.address}`,
+        symbol: p.symbol,
+        name: p.name,
+        balance: "0",
+        balanceRaw: "0",
+        decimals: p.decimals,
+        isNative: isSol,
+        mint: isSol ? SOL_WSOL_MINT : p.address,
+        logoUrl: p.logoUrl ?? null,
+      };
+      if (fromToken && picked.mint === fromToken.mint) {
+        // Avoid the same token on both sides — swap the FROM side out.
+        setFromToken(toToken);
+      }
+      setToToken(picked);
+      resetOrder();
+      return;
+    }
+    // EVM destination → enter the LI.FI bridge flow (Solana source).
+    setBridgeTo(p);
   }
 
   function handleSwitch() {
@@ -522,6 +565,45 @@ export function SolanaSwapPage({
     order && toToken ? formatBaseUnits(order.outAmount, toToken.decimals) : "—";
   const isBusy = submitStatus === "signing" || submitStatus === "executing";
 
+  // ── Cross-chain (Solana → EVM) bridge mode ──
+  // The user picked a receive token on an EVM chain. Hand off to the LI.FI
+  // bridge flow with the Solana source: fromChain = LI.FI Solana id, fromToken =
+  // the current Solana FROM token, toChain/toToken = the EVM pick. BridgePage
+  // owns address selection (Solana source → Solana address; EVM dest → EVM
+  // address; no cross-type fallback) and route execution. Backing out or
+  // collapsing the pair onto one chain returns here to the Jupiter flow.
+  if (bridgeTo && fromToken) {
+    return (
+      <BridgePage
+        selectedAccount={selectedAccount}
+        walletState={walletState}
+        initialFromChainId={LIFI_SOLANA_CHAIN_ID}
+        initialFromToken={{
+          chainId: LIFI_SOLANA_CHAIN_ID,
+          address: fromToken.mint,
+          symbol: fromToken.symbol,
+          name: fromToken.name,
+          decimals: fromToken.decimals,
+          isNative: fromToken.isNative,
+          logoUrl: fromToken.logoUrl,
+        }}
+        initialToChainId={bridgeTo.chainId}
+        initialToToken={{
+          chainId: bridgeTo.chainId,
+          address: bridgeTo.address,
+          symbol: bridgeTo.symbol,
+          name: bridgeTo.name,
+          decimals: bridgeTo.decimals,
+          isNative: bridgeTo.isNative,
+          logoUrl: bridgeTo.logoUrl ?? null,
+        }}
+        onSameChainSelected={() => setBridgeTo(null)}
+        onBridgeCompleted={onSwapCompleted}
+        onBack={() => setBridgeTo(null)}
+      />
+    );
+  }
+
   // ── Success screen ──
   if (step === "success") {
     return (
@@ -648,7 +730,7 @@ export function SolanaSwapPage({
               <button
                 className="swap-token-pill"
                 type="button"
-                onClick={() => step === "form" && setPicker("to")}
+                onClick={() => step === "form" && setToPickerOpen(true)}
                 disabled={step !== "form"}
               >
                 {toToken ? (
@@ -802,12 +884,13 @@ export function SolanaSwapPage({
         </div>
       </div>
 
-      {/* Token picker — a real wallet screen (not a modal), matching the shared
-          cross-chain picker shell: SwapHeader with a back button, no backdrop. */}
-      {picker ? (
+      {/* FROM picker — Solana-only list, a real wallet screen (not a modal):
+          SwapHeader with a back button, no backdrop. The TO side uses the shared
+          cross-chain picker below. */}
+      {picker === "from" ? (
         <div className="swap-token-picker-page" role="dialog" aria-modal="true">
           <SwapHeader
-            title={picker === "from" ? "Select token to sell" : "Select token to receive"}
+            title="Select token to sell"
             subtitle="Solana"
             onBack={() => setPicker(null)}
           />
@@ -838,6 +921,17 @@ export function SolanaSwapPage({
             ))}
           </div>
         </div>
+      ) : null}
+
+      {/* TO picker — shared cross-chain picker. A Solana pick stays in Jupiter
+          mode; an EVM pick reshapes the route into a Solana → EVM bridge. */}
+      {toPickerOpen ? (
+        <CrossChainTokenPicker
+          side="to"
+          currentChainId={LIFI_SOLANA_CHAIN_ID}
+          onSelect={handlePickTo}
+          onClose={() => setToPickerOpen(false)}
+        />
       ) : null}
     </div>
   );

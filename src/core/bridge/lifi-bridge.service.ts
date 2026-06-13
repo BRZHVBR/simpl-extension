@@ -37,6 +37,43 @@ const API_BASE_URL = resolveApiBaseUrl();
 export const LIFI_NATIVE_ADDRESS =
   "0x0000000000000000000000000000000000000000";
 
+// ── Diagnostics ─────────────────────────────────────────────────────────────
+//
+// Opt-in, structured bridge diagnostics. On in dev builds or when
+// VITE_BRIDGE_DEBUG="true"; silent in production otherwise. These logs are
+// privacy-safe by construction: addresses are reduced to a {evm|solana|…} TYPE
+// tag (classifyAddressType) before logging — never the raw address — and we
+// never log secrets, API keys, headers or raw provider payloads.
+const BRIDGE_DEBUG =
+  Boolean(import.meta.env.DEV) ||
+  (import.meta.env.VITE_BRIDGE_DEBUG as string | undefined) === "true";
+
+export function bridgeDebugLog(
+  event: string,
+  data: Record<string, unknown>,
+): void {
+  if (!BRIDGE_DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.info(`[SIMPL bridge] ${event}`, data);
+}
+
+// Classify an address by type WITHOUT exposing the address itself — so callers
+// can log "fromAddress type" safely.
+export function classifyAddressType(
+  address: string | null | undefined,
+): "evm" | "solana" | "none" | "unknown" {
+  if (!address) return "none";
+  if (/^0x[0-9a-fA-F]{40}$/u.test(address)) return "evm";
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/u.test(address)) return "solana";
+  return "unknown";
+}
+
+// EVM vs SVM family for the supported production chain set (Solana is the only
+// non-EVM source/destination the bridge offers; everything else is EVM).
+export function bridgeChainType(chainId: number): "EVM" | "SVM" {
+  return chainId === LIFI_SOLANA_CHAIN_ID ? "SVM" : "EVM";
+}
+
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 async function fetchJson<T>(
@@ -277,6 +314,16 @@ export type BridgeQuote = {
   solanaTransactionData: string | null;
   // True when the wallet can sign + send this route locally right now.
   executable: boolean;
+  // Coarse execution readiness for the UI / diagnostics:
+  //   "executable" — a tx the wallet can sign + send is present,
+  //   "quoteOnly"  — a valid quote but no signable tx (preview only),
+  //   "unsupported"— the route's tx format isn't something we can sign.
+  executionStatus: "executable" | "quoteOnly" | "unsupported";
+  // Short, human-readable, display-safe reason behind executionStatus.
+  executionReason: string;
+  // Source / destination chain family, for branching and diagnostics.
+  sourceChainType: "EVM" | "SVM";
+  destinationChainType: "EVM" | "SVM";
 };
 
 // LI.FI's Solana (SVM) chain id. Used to detect Solana-source routes.
@@ -304,6 +351,9 @@ type RawTxRequest = {
   // Gateway-normalized format hint: "evm" | "solana" | "non-evm". When absent we
   // infer EVM from the presence of an EVM `to` + `data`.
   format?: string;
+  // Solana payload: the gateway returns the serialized SVM transaction here and
+  // may also mirror it into `data`. Prefer this field for Solana execution.
+  serializedTransaction?: string | null;
 };
 
 type RawBridgeQuote = {
@@ -416,19 +466,34 @@ function normalizeTxRequest(
 }
 
 // Classify the source-step transaction format the route needs. Prefers the
-// gateway's explicit `format` hint and falls back to inferring EVM from an EVM
-// tx shape. TRON / unknown VMs are "other" → never executable here.
+// gateway's explicit `format` hint, then falls back to inferring from the tx
+// shape and the SOURCE chain family. TRON / unknown VMs are "other" → never
+// executable here.
+//
+// The shape fallback matters: LI.FI's Solana transactionRequest carries a
+// base64 `data` blob but NO EVM `to` field, and the gateway does not always
+// stamp `format`. Without the source-chain check below, every such Solana route
+// would misclassify as "other" and silently degrade to preview-only.
 function detectTxFormat(
   raw: RawTxRequest | null | undefined,
+  fromChainId: number,
 ): "evm" | "solana" | "other" {
   if (!raw) return "other";
   const fmt = typeof raw.format === "string" ? raw.format.toLowerCase() : "";
   if (fmt === "solana" || fmt === "svm") return "solana";
   if (fmt === "evm") return "evm";
   if (fmt) return "other"; // explicit non-evm / tron / etc.
-  return typeof raw.to === "string" && typeof raw.data === "string"
-    ? "evm"
-    : "other";
+  // No explicit hint — infer from shape first, then the source chain family.
+  if (typeof raw.to === "string" && typeof raw.data === "string") return "evm";
+  const solanaPayload = raw.serializedTransaction ?? raw.data;
+  if (
+    fromChainId === LIFI_SOLANA_CHAIN_ID &&
+    typeof solanaPayload === "string" &&
+    solanaPayload.length > 0
+  ) {
+    return "solana";
+  }
+  return "other";
 }
 
 function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
@@ -439,18 +504,24 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
 
   const gas = sumGasCosts(estimate.gasCosts);
   const fee = pickFeeCost(estimate.feeCosts);
-  const txFormat = detectTxFormat(raw.transactionRequest);
+  const txFormat = detectTxFormat(raw.transactionRequest, fromChainId);
   const txRequest =
     txFormat === "evm"
       ? normalizeTxRequest(raw.transactionRequest, fromChainId)
       : null;
   // Serialized Solana transaction string — only when the gateway clearly marks
-  // the format as "solana" and supplies data. Never a raw provider payload.
+  // the format as "solana" and supplies a payload. The gateway returns it as
+  // `serializedTransaction` and may mirror it into `data`; prefer the former and
+  // fall back to the latter. Never a raw provider payload.
+  const rawSolanaPayload =
+    raw.transactionRequest?.serializedTransaction ??
+    raw.transactionRequest?.data ??
+    null;
   const solanaTransactionData =
     txFormat === "solana" &&
-    typeof raw.transactionRequest?.data === "string" &&
-    raw.transactionRequest.data.length > 0
-      ? raw.transactionRequest.data
+    typeof rawSolanaPayload === "string" &&
+    rawSolanaPayload.length > 0
+      ? rawSolanaPayload
       : null;
 
   // A route is executable only when the gateway didn't flag it quote-only AND:
@@ -470,6 +541,28 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
     txFormat === "solana" &&
     solanaTransactionData !== null;
   const executable = evmExecutable || solanaExecutable;
+
+  // Derive a coarse, display-safe execution status + reason. "unsupported" is
+  // reserved for a tx format the wallet can never sign (e.g. TRON / unknown VM);
+  // a valid quote we simply can't sign right now is "quoteOnly".
+  let executionStatus: BridgeQuote["executionStatus"];
+  let executionReason: string;
+  if (executable) {
+    executionStatus = "executable";
+    executionReason =
+      txFormat === "solana"
+        ? "Executable Solana transaction."
+        : "Executable EVM transaction.";
+  } else if (txFormat === "other") {
+    executionStatus = "unsupported";
+    executionReason = "This route's transaction format isn't supported yet.";
+  } else if (txFormat === "solana" && solanaTransactionData === null) {
+    executionStatus = "quoteOnly";
+    executionReason = "Route found, but no executable Solana transaction was returned.";
+  } else {
+    executionStatus = "quoteOnly";
+    executionReason = "Route found, execution is not supported yet.";
+  }
 
   return {
     fromChainId,
@@ -502,6 +595,10 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
     txFormat,
     solanaTransactionData,
     executable,
+    executionStatus,
+    executionReason,
+    sourceChainType: bridgeChainType(fromChainId),
+    destinationChainType: bridgeChainType(toChainId),
   };
 }
 
@@ -543,6 +640,19 @@ export async function getBridgeQuote(
   if (params.allowExchanges?.length) body.allowExchanges = params.allowExchanges;
   if (params.denyExchanges?.length) body.denyExchanges = params.denyExchanges;
 
+  // Structured request diagnostics — chains, token addresses and ADDRESS TYPES
+  // only (never the raw addresses, never secrets/headers).
+  bridgeDebugLog("quote:request", {
+    fromChain: params.fromChainId,
+    toChain: params.toChainId,
+    sourceChainType: bridgeChainType(params.fromChainId),
+    destinationChainType: bridgeChainType(params.toChainId),
+    fromToken: params.fromTokenAddress,
+    toToken: params.toTokenAddress,
+    fromAddressType: classifyAddressType(params.fromAddress),
+    toAddressType: classifyAddressType(params.toAddress),
+  });
+
   let raw: RawBridgeQuote;
   try {
     raw = await fetchJson<RawBridgeQuote>(
@@ -555,6 +665,10 @@ export async function getBridgeQuote(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    bridgeDebugLog("quote:error", {
+      fromChain: params.fromChainId,
+      toChain: params.toChainId,
+    });
     // A 404 from the gateway means "no route" — surface the friendly variant.
     if (/\b404\b/u.test(message) || /not\s*found/iu.test(message)) {
       throw new NoBridgeRouteError();
@@ -563,10 +677,29 @@ export async function getBridgeQuote(
   }
 
   if (!raw || (!raw.estimate && !raw.transactionRequest)) {
+    bridgeDebugLog("quote:no-route", {
+      fromChain: params.fromChainId,
+      toChain: params.toChainId,
+    });
     throw new NoBridgeRouteError();
   }
 
-  return normalizeQuote(raw);
+  const quote = normalizeQuote(raw);
+
+  bridgeDebugLog("quote:result", {
+    fromChain: quote.fromChainId,
+    toChain: quote.toChainId,
+    sourceChainType: quote.sourceChainType,
+    destinationChainType: quote.destinationChainType,
+    hasTransactionRequest: raw.transactionRequest != null,
+    txFormat: quote.txFormat,
+    executable: quote.executable,
+    executionStatus: quote.executionStatus,
+    executionReason: quote.executionReason,
+    tool: quote.toolKey,
+  });
+
+  return quote;
 }
 
 // ── Status ────────────────────────────────────────────────────────────────

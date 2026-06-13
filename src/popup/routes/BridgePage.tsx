@@ -29,6 +29,8 @@ import {
   readErc20Allowance,
   NoBridgeRouteError,
   LIFI_SOLANA_CHAIN_ID,
+  bridgeDebugLog,
+  classifyAddressType,
   type BridgeChain,
   type BridgeToken,
   type BridgeQuote,
@@ -37,6 +39,9 @@ import {
   SOLANA_MAINNET,
   getSolanaTransactionExplorerUrl,
 } from "../../chains/solana/solana.config";
+import { getSolBalance } from "../../chains/solana/solana.balance";
+import { getSplTokenBalanceByMint } from "../../chains/solana/solana.tokens";
+import { SOL_WSOL_MINT } from "../../core/swaps/solana-swap.service";
 import {
   resolveChainTokenBalance,
   LOADING_BALANCE,
@@ -68,6 +73,19 @@ type BridgePageProps = {
   // Source/destination chains the parent Swap screen entered cross-chain with.
   initialFromChainId?: number;
   initialToChainId?: number;
+  // Source token the parent screen entered with (e.g. the Solana FROM token when
+  // a Solana → EVM bridge is launched from the Solana swap screen). Preselected
+  // so the route matches the user's choice; reconciled against LI.FI's canonical
+  // token list on load so native identifiers stay correct.
+  initialFromToken?: {
+    chainId: number;
+    address: string;
+    symbol: string;
+    name: string;
+    decimals: number;
+    isNative: boolean;
+    logoUrl?: string | null;
+  } | null;
   // Destination token the user picked on another network from the same-chain
   // Swap screen (preselected here so the route matches their choice).
   initialToToken?: {
@@ -200,12 +218,28 @@ function friendlyError(error: unknown): string {
     return "Insufficient balance.";
   }
   if (
+    lower.includes("expired") ||
+    lower.includes("quote is no longer") ||
+    lower.includes("stale")
+  ) {
+    return "This route expired. Get a fresh quote and try again.";
+  }
+  if (
+    lower.includes("simulation failed") ||
+    lower.includes("simulate") ||
+    lower.includes("blockhash") ||
+    lower.includes("reverted")
+  ) {
+    return "Transaction simulation failed. Try a fresh quote or a smaller amount.";
+  }
+  if (
     lower.includes("failed to fetch") ||
     lower.includes("network error") ||
     lower.includes("timeout") ||
-    lower.includes("aborted")
+    lower.includes("aborted") ||
+    lower.includes("rpc")
   ) {
-    return "Network is temporarily unavailable. Please try again.";
+    return "Network or RPC is temporarily unavailable. Please try again.";
   }
   if (lower.includes("no route") || lower.includes("not found")) {
     return "No route found for this pair. Try another token, chain, or amount.";
@@ -236,6 +270,60 @@ function pickDefaultToken(list: BridgeToken[]): BridgeToken | null {
   return list.find((t) => t.isNative) ?? list[0] ?? null;
 }
 
+// LI.FI's canonical Solana token for native SOL is the wSOL mint, often labelled
+// "wSOL" — but the user pays native SOL from their Solana wallet. Detect that
+// source token so we can DISPLAY it as "SOL" and read the native SOL balance,
+// while the quote keeps using whatever LI.FI identifier the token carries.
+function isSolanaNativeSource(
+  chainId: number,
+  token: BridgeToken | null,
+): boolean {
+  if (chainId !== LIFI_SOLANA_CHAIN_ID || !token) return false;
+  const symbol = token.symbol.toUpperCase();
+  return (
+    token.isNative ||
+    token.address.toLowerCase() === SOL_WSOL_MINT.toLowerCase() ||
+    symbol === "SOL" ||
+    symbol === "WSOL"
+  );
+}
+
+// Resolve a Solana source-token balance using the Solana RPC (never the EVM
+// loaders): native SOL via getSolBalance, SPL via getSplTokenBalanceByMint. A
+// missing SPL token account is a real zero, not a permanent dash.
+async function resolveSolanaSourceBalance(params: {
+  owner: string | null;
+  chainId: number;
+  token: BridgeToken;
+}): Promise<ResolvedBalance> {
+  if (!params.owner) return UNAVAILABLE_BALANCE;
+  try {
+    if (isSolanaNativeSource(params.chainId, params.token)) {
+      const balance = await getSolBalance(params.owner, SOLANA_MAINNET);
+      return {
+        status: "loaded",
+        baseUnits: balance.raw.toString(),
+        formatted: balance.formatted,
+      };
+    }
+    const balance = await getSplTokenBalanceByMint(
+      SOLANA_MAINNET,
+      params.owner,
+      params.token.address,
+    );
+    if (!balance) {
+      return { status: "loaded", baseUnits: "0", formatted: "0" };
+    }
+    return {
+      status: "loaded",
+      baseUnits: balance.rawAmount.toString(),
+      formatted: balance.uiAmountString,
+    };
+  } catch {
+    return { status: "error", baseUnits: null, formatted: null };
+  }
+}
+
 export function BridgePage({
   selectedAccount,
   walletState,
@@ -243,6 +331,7 @@ export function BridgePage({
   onBridgeCompleted,
   initialFromChainId,
   initialToChainId,
+  initialFromToken,
   initialToToken,
   onSameChainSelected,
 }: BridgePageProps) {
@@ -279,7 +368,11 @@ export function BridgePage({
 
   const [fromTokens, setFromTokens] = useState<BridgeToken[]>([]);
   const [toTokens, setToTokens] = useState<BridgeToken[]>([]);
-  const [fromToken, setFromToken] = useState<BridgeToken | null>(null);
+  const [fromToken, setFromToken] = useState<BridgeToken | null>(() =>
+    initialFromToken && initialFromToken.chainId === initialFromChain
+      ? { ...initialFromToken, logoUrl: initialFromToken.logoUrl ?? null, priceUsd: null }
+      : null,
+  );
   const [toToken, setToToken] = useState<BridgeToken | null>(() =>
     initialToToken && initialToToken.chainId === initialToChainId
       ? { ...initialToToken, logoUrl: initialToToken.logoUrl ?? null, priceUsd: null }
@@ -341,13 +434,19 @@ export function BridgePage({
       return;
     }
     setFromBalance(LOADING_BALANCE);
-    void resolveChainTokenBalance({
-      owner,
-      chainId: fromChainId,
-      tokenAddress: fromToken.isNative ? null : fromToken.address,
-      isNative: fromToken.isNative,
-      decimals: fromToken.decimals,
-    }).then((r) => {
+    // Solana source → read the real SOL / SPL balance off the Solana RPC with
+    // the account's Solana address; never the EVM loaders.
+    const resolver =
+      fromChainId === LIFI_SOLANA_CHAIN_ID
+        ? resolveSolanaSourceBalance({ owner, chainId: fromChainId, token: fromToken })
+        : resolveChainTokenBalance({
+            owner,
+            chainId: fromChainId,
+            tokenAddress: fromToken.isNative ? null : fromToken.address,
+            isNative: fromToken.isNative,
+            decimals: fromToken.decimals,
+          });
+    void resolver.then((r) => {
       if (active) setFromBalance(r);
     });
     return () => {
@@ -429,7 +528,24 @@ export function BridgePage({
         const list = await getBridgeTokens(fromChainId);
         if (!active) return;
         setFromTokens(list);
-        setFromToken((cur) => cur ?? pickDefaultToken(list));
+        setFromToken((cur) => {
+          if (!cur) return pickDefaultToken(list);
+          // Solana source only: reconcile a handed-off token (e.g. native SOL
+          // from the Solana swap screen) against LI.FI's canonical list so the
+          // quote uses LI.FI's exact token identifier. Match by address, then by
+          // symbol. The EVM From flow keeps its existing keep-as-picked behavior.
+          if (fromChainId === LIFI_SOLANA_CHAIN_ID) {
+            const byAddress = list.find(
+              (t) => t.address.toLowerCase() === cur.address.toLowerCase(),
+            );
+            if (byAddress) return byAddress;
+            const bySymbol = list.find(
+              (t) => t.symbol.toUpperCase() === cur.symbol.toUpperCase(),
+            );
+            if (bySymbol) return bySymbol;
+          }
+          return cur;
+        });
       } catch {
         if (active) setFromTokens([]);
       }
@@ -532,7 +648,10 @@ export function BridgePage({
     if (fromBalance.status === "loaded" && fromBalance.baseUnits != null) {
       try {
         if (amountBase > BigInt(fromBalance.baseUnits)) {
-          return `Insufficient ${fromToken.symbol}`;
+          const sym = isSolanaNativeSource(fromChainId, fromToken)
+            ? "SOL"
+            : fromToken.symbol;
+          return `Insufficient ${sym}`;
         }
       } catch {
         // ignore — fall through to allow
@@ -608,6 +727,22 @@ export function BridgePage({
 
       setQuote(nextQuote);
       setStep("review");
+
+      // Diagnostics — selected pair, address TYPES (never raw addresses) and the
+      // resolved execution readiness. `ctaEnabled` mirrors the Confirm gating.
+      bridgeDebugLog("page:quote", {
+        fromChain: fromChainId,
+        toChain: toChainId,
+        fromToken: fromToken.symbol,
+        toToken: toToken.symbol,
+        fromAddressType: classifyAddressType(fromAddress),
+        toAddressType: classifyAddressType(toAddress),
+        sourceChainType: nextQuote.sourceChainType,
+        destinationChainType: nextQuote.destinationChainType,
+        executionStatus: nextQuote.executionStatus,
+        txFormat: nextQuote.txFormat,
+        ctaEnabled: nextQuote.executable,
+      });
 
       // Determine whether an ERC-20 approval is required for executable EVM
       // routes. Solana routes never need an EVM allowance.
@@ -717,6 +852,10 @@ export function BridgePage({
         quote.feeCostBaseUnits && quote.feeCostSymbol
           ? `${formatBaseUnits(quote.feeCostBaseUnits, quote.feeCostDecimals)} ${quote.feeCostSymbol}`
           : undefined;
+      // Record native SOL as "SOL" in activity, not LI.FI's wSOL label.
+      const fromSym = isSolanaNativeSource(fromChainId, fromToken)
+        ? "SOL"
+        : fromToken.symbol;
 
       try {
         transactionHistoryService.addTransaction({
@@ -726,10 +865,10 @@ export function BridgePage({
           direction: "bridge",
           status: "submitted",
           assetType: "bridge",
-          assetSymbol: `${fromToken.symbol} → ${toToken.symbol}`,
-          assetName: `Cross-chain swap ${fromToken.symbol} to ${toChain?.name ?? "destination"}`,
+          assetSymbol: `${fromSym} → ${toToken.symbol}`,
+          assetName: `Cross-chain swap ${fromSym} to ${toChain?.name ?? "destination"}`,
           contractAddress: null,
-          amount: `${amount} ${fromToken.symbol}`,
+          amount: `${amount} ${fromSym}`,
           fromAddress: historyFromAddress,
           toAddress: historyToAddress,
           explorerUrl: resultExplorerUrl,
@@ -738,7 +877,7 @@ export function BridgePage({
           bridgeToChainId: toChainId,
           bridgeFromChainName: fromChain?.name,
           bridgeToChainName: toChain?.name,
-          bridgeFromSymbol: fromToken.symbol,
+          bridgeFromSymbol: fromSym,
           bridgeFromAmount: amount,
           bridgeToSymbol: toToken.symbol,
           bridgeToAmount: estReceive,
@@ -748,6 +887,15 @@ export function BridgePage({
       } catch {
         // History is best-effort — never block a successful swap on it.
       }
+
+      bridgeDebugLog("page:submitted", {
+        fromChain: fromChainId,
+        toChain: toChainId,
+        txFormat: quote.txFormat,
+        // The on-chain tx hash / Solana signature is a public identifier — safe
+        // to log (it is not a secret), and the explorer link uses it anyway.
+        txHash: resultHash,
+      });
 
       setTxHash(resultHash);
       setExplorerUrl(resultExplorerUrl);
@@ -831,6 +979,24 @@ export function BridgePage({
     return formatBaseUnits(quote.toAmountBaseUnits, quote.toTokenDecimals);
   }, [quote, toToken]);
 
+  // Clear, directional route mode. When either side is Solana we name both ends
+  // ("Solana → BNB Chain" / "BNB Chain → Solana"); a plain EVM↔EVM route keeps
+  // the generic label.
+  const routeModeLabel = useMemo(() => {
+    const involvesSolana =
+      fromChainId === LIFI_SOLANA_CHAIN_ID || toChainId === LIFI_SOLANA_CHAIN_ID;
+    if (!involvesSolana) return "Cross-chain route";
+    const fromName = fromChain?.name ?? getNetworkLabel(fromChainId);
+    const toName = toChain?.name ?? getNetworkLabel(toChainId);
+    return `${fromName} → ${toName}`;
+  }, [fromChainId, toChainId, fromChain, toChain]);
+
+  // The FROM token pays native SOL on Solana even when LI.FI's token is wSOL:
+  // display "SOL" with native art (the quote still uses the LI.FI identifier).
+  const fromIsSolNative = isSolanaNativeSource(fromChainId, fromToken ?? null);
+  const fromDisplaySymbol = fromIsSolNative ? "SOL" : fromToken?.symbol;
+  const fromDisplayName = fromIsSolNative ? "Solana" : fromToken?.name;
+
   // ── Success screen ──
   if (step === "success") {
     const statusTitle =
@@ -841,14 +1007,14 @@ export function BridgePage({
           : "Cross-chain swap submitted";
     return (
       <div className="ext-popup swap-page" data-screen-label="Swap – Cross-chain">
-        <SwapHeader title="Swap" subtitle="Cross-chain route" onBack={onBack} />
+        <SwapHeader title="Swap" subtitle={routeModeLabel} onBack={onBack} />
         <div className="screen-body">
           <div className="swap-quote-card" style={{ textAlign: "center", gap: 6 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink-1)" }}>
               {statusTitle}
             </div>
             <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-              {fromToken?.symbol} {fromChain?.name} → {toToken?.symbol}{" "}
+              {fromDisplaySymbol} {fromChain?.name} → {toToken?.symbol}{" "}
               {toChain?.name} via {quote?.toolName ?? "route"}
             </div>
           </div>
@@ -856,7 +1022,7 @@ export function BridgePage({
             <div className="swap-quote-row">
               <span>You sent</span>
               <strong>
-                {amount} {fromToken?.symbol}
+                {amount} {fromDisplaySymbol}
               </strong>
             </div>
             <div className="swap-quote-row">
@@ -919,7 +1085,7 @@ export function BridgePage({
     <div className="ext-popup swap-page" data-screen-label="Swap – Cross-chain">
       <SwapHeader
         title={step === "review" ? "Review swap" : "Swap"}
-        subtitle="Cross-chain route"
+        subtitle={routeModeLabel}
         onBack={step === "review" ? () => setStep("form") : onBack}
       />
 
@@ -944,9 +1110,11 @@ export function BridgePage({
                 >
                   {fromToken ? (
                     <TokenWithChainBadge
-                      symbol={fromToken.symbol}
-                      tokenLogoUrl={fromToken.logoUrl}
-                      tokenAddress={fromToken.isNative ? null : fromToken.address}
+                      symbol={fromDisplaySymbol}
+                      tokenLogoUrl={fromIsSolNative ? null : fromToken.logoUrl}
+                      tokenAddress={
+                        fromIsSolNative || fromToken.isNative ? null : fromToken.address
+                      }
                       chainId={fromChainId}
                       chainName={fromChain?.name ?? getNetworkLabel(fromChainId)}
                       chainLogoUrl={fromChain?.logoUrl}
@@ -956,7 +1124,7 @@ export function BridgePage({
                     <span className="swap-token-pill__icon">?</span>
                   )}
                   <span className="swap-token-pill__sym">
-                    {fromToken?.symbol ?? "Token"}
+                    {fromDisplaySymbol ?? "Token"}
                   </span>
                   <span className="swap-token-pill__chevron">▾</span>
                 </button>
@@ -974,10 +1142,10 @@ export function BridgePage({
               }}
             />
             <div className="swap-half-bottom">
-              <span>{fromToken?.name ?? "—"}</span>
+              <span>{fromDisplayName ?? "—"}</span>
               <span className="swap-half-bottom__right">
                 <span className="swap-half-bottom__bal">
-                  {balanceLabel(fromBalance, fromToken?.symbol)}
+                  {balanceLabel(fromBalance, fromDisplaySymbol)}
                 </span>
                 {step === "form" && fromBalancePositive ? (
                   <button
@@ -1083,7 +1251,7 @@ export function BridgePage({
             <div className="swap-quote-row">
               <span>From</span>
               <strong>
-                {amount} {fromToken?.symbol} · {fromChain?.name}
+                {amount} {fromDisplaySymbol} · {fromChain?.name}
               </strong>
             </div>
             <div className="swap-quote-row">
@@ -1106,7 +1274,7 @@ export function BridgePage({
             ) : null}
             <div className="swap-quote-row">
               <span>Route type</span>
-              <strong>Cross-chain route</strong>
+              <strong>{routeModeLabel}</strong>
             </div>
             <div className="swap-quote-row swap-quote-row--route">
               <span>Provider</span>
@@ -1156,7 +1324,7 @@ export function BridgePage({
             broken confirm button. */}
         {step === "review" && previewOnly ? (
           <SwapRouteNotice variant="preview">
-            Route found, execution is not supported yet.
+            {quote?.executionReason ?? "Route found, execution is not supported yet."}
           </SwapRouteNotice>
         ) : null}
 
