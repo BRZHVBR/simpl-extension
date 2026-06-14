@@ -705,6 +705,19 @@ export function BridgePage({
     return evmAddress;
   }
 
+  // The owner address for a chain by its ID — independent of the loaded `chains`
+  // list. The balance effects MUST use this, not addressForChain(fromChain):
+  // `fromChain` is looked up from `chains`, which is empty until the chain list
+  // loads, and addressForChain(undefined) falls back to the EVM address — so a
+  // TRON/Solana source was read with the EVM address (the "[bridge:balance] retry
+  // { chainType: TVM, accountAddressType: evm }" symptom). Keyed by chain id, a
+  // TVM source always resolves to the TRON T… address (or null until derived).
+  function ownerForChainId(chainId: number): string | null {
+    if (chainId === LIFI_SOLANA_CHAIN_ID) return solanaAddress;
+    if (chainId === LIFI_TRON_CHAIN_ID) return tronAddress;
+    return evmAddress;
+  }
+
   // Resolve a chain's address for a quote, deriving the TRON address on demand
   // when the route involves TRON and it isn't cached yet. EVM/Solana are returned
   // synchronously (unchanged). Emits [bridge:tron] address-resolve diagnostics
@@ -787,7 +800,7 @@ export function BridgePage({
 
   useEffect(() => {
     let active = true;
-    const owner = addressForChain(fromChain);
+    const owner = ownerForChainId(fromChainId);
     if (!fromToken) {
       setFromBalance(UNAVAILABLE_BALANCE);
       return;
@@ -835,7 +848,7 @@ export function BridgePage({
 
   useEffect(() => {
     let active = true;
-    const owner = addressForChain(toChain);
+    const owner = ownerForChainId(toChainId);
     if (!toToken) {
       setToBalance(UNAVAILABLE_BALANCE);
       return;

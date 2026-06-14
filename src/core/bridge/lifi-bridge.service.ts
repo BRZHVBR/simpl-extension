@@ -284,6 +284,17 @@ function isTronSourceAddressForm(value: string | null): boolean {
   return /^(?:0x)?41[0-9a-fA-F]{40}$/iu.test(value);
 }
 
+// Classify a TRON route's `from` for the [bridge:lifi] tron-executable-gate log —
+// safe metadata only (a TYPE tag, never the address itself).
+function tronFromAddressFormLabel(
+  value: string | null,
+): "base58" | "hex" | "none" | "non-tron" {
+  if (value == null) return "none";
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/u.test(value)) return "base58";
+  if (/^(?:0x)?41[0-9a-fA-F]{40}$/iu.test(value)) return "hex";
+  return "non-tron";
+}
+
 // VM family for the supported production chain set. Solana (SVM) and TRON (TVM)
 // are the non-EVM source/destinations the bridge offers; everything else is EVM.
 // UTXO / other VMs are not offered, so they fall through to "EVM" and are gated
@@ -1098,20 +1109,31 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
     fromChainId === LIFI_SOLANA_CHAIN_ID &&
     txFormat === "solana" &&
     solanaTransactionData !== null;
-  // TRON: the source is the LI.FI TRON chain, the format is "tron", a raw_data_hex
-  // was extracted, AND the route's `from` (when the provider exposed it) is a
-  // TRON address in EITHER representation. LI.FI/allbridge frequently returns the
-  // `from`/`to` of a TRON route in hex (41…) form, NOT base58 (T…) — a base58-only
-  // guard wrongly rejected those routes as preview-only even though their
-  // raw_data_hex is fully signable. We accept both forms (and a null/omitted
-  // `from`); the authoritative signer-match against the active account happens
-  // again at execution time in executeTronBridgeTransaction.
-  const tronExecutable =
-    !flaggedQuoteOnly &&
+  // TRON: the signable raw_data_hex is the SOURCE OF TRUTH for executability.
+  //
+  // The Simpl gateway returns a TRON-source route WITH an extractable raw_data_hex
+  // (transactionRequest.data, leading 0a, ~2730 hex chars) while ALSO stamping it
+  // executionStatus:"quoteOnly" / executable:false — an inconsistent normalization
+  // (it hands us a transaction we can sign, then labels it preview-only). Honoring
+  // that SOFT quote-only flag is what kept TRON→Solana stuck on "Execution coming
+  // soon" even with the from-format fix.
+  //
+  // So for TRON we IGNORE the soft quote-only flag when a signable tx is present,
+  // and keep the route preview ONLY when the gateway HARD-marks it "unsupported"
+  // or no raw_data_hex came back. EVM / Solana keep honoring flaggedQuoteOnly
+  // unchanged. The from-address must be a TRON form (or omitted); the authoritative
+  // signer-match against the active account is re-enforced at execution time in
+  // executeTronBridgeTransaction (and TRX-for-fees is gated there too).
+  const gatewayHardUnsupported =
+    typeof raw.executionStatus === "string" &&
+    raw.executionStatus.toLowerCase() === "unsupported";
+  const tronFromAccepted = isTronSourceAddressForm(tronFromAddress);
+  const tronDataEnabled =
     fromChainId === LIFI_TRON_CHAIN_ID &&
     txFormat === "tron" &&
     tronTransactionData !== null &&
-    isTronSourceAddressForm(tronFromAddress);
+    tronFromAccepted;
+  const tronExecutable = tronDataEnabled && !gatewayHardUnsupported;
   const executable = evmExecutable || solanaExecutable || tronExecutable;
 
   // Derive a coarse, display-safe execution status + reason. "unsupported" is
@@ -1139,7 +1161,14 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
       executionStatus = "unsupported";
       executionReason =
         "Provider route requires TRON transaction build support not implemented yet.";
+    } else if (gatewayHardUnsupported) {
+      // Gateway/provider explicitly says this TRON route can't be executed.
+      executionStatus = "unsupported";
+      executionReason = "This TRON route is not available yet.";
     } else {
+      // No signable raw_data_hex came back (transactionRequest missing) — a real
+      // preview. A route WITH raw_data_hex is now executable above, so this branch
+      // is only reached when the provider genuinely returned no TRON tx.
       executionStatus = "quoteOnly";
       executionReason =
         "TRON source execution is not available for this route yet.";
@@ -1160,6 +1189,39 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
   } else {
     executionStatus = "quoteOnly";
     executionReason = "Route found, execution is not supported yet.";
+  }
+
+  // Definitive TRON executability trace (safe metadata only, behind
+  // simpl.debug.bridge): shows EXACTLY what the gateway sent vs. what the app
+  // decided, so a future quoteOnly regression can be pinned to the gateway flag,
+  // the from-form, or the data extraction in one line.
+  if (txFormat === "tron") {
+    const rawAny = raw as { executionStatus?: unknown; executionReason?: unknown };
+    lifiShapeLog("tron-executable-gate", {
+      fromChainId,
+      toChainId,
+      sourceChainType: bridgeChainType(fromChainId),
+      destinationChainType,
+      txFormat,
+      hasTransactionRequest: raw.transactionRequest != null,
+      hasTronTransactionData: tronTransactionData !== null,
+      transactionSourceField: tronTransactionSourceField,
+      rawDataHexLength: tronTransactionData ? tronTransactionData.length : null,
+      tronFromAddressForm: tronFromAddressFormLabel(tronFromAddress),
+      tronFromAccepted,
+      gatewayExecutionStatus:
+        typeof rawAny.executionStatus === "string" ? rawAny.executionStatus : null,
+      gatewayExecutionReason:
+        typeof rawAny.executionReason === "string" ? rawAny.executionReason : null,
+      gatewayExecutable:
+        typeof raw.executable === "boolean" ? raw.executable : null,
+      flaggedQuoteOnly,
+      dataEnabled: tronDataEnabled,
+      tronExecutable,
+      finalExecutable: executable,
+      finalExecutionStatus: executionStatus,
+      finalExecutionReason: executionReason,
+    });
   }
 
   return {
