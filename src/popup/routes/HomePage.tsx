@@ -1491,8 +1491,13 @@ export function HomePage(props: HomePageProps) {
     // swap.
     const swapFamily = getChainFamily(asset.chainId);
     const swapSupportedFamily = swapFamily === "evm" || swapFamily === "solana";
+    // TRON has no SAME-chain swap, but TRON assets ARE usable as a CROSS-CHAIN
+    // bridge SOURCE via LI.FI (BridgePage). Expose the Swap action for them too —
+    // App routes a TRON Swap to the cross-chain bridge, never the 0x same-chain
+    // flow (which would 400 for TRON).
+    const isBridgeSource = isTronChainId(asset.chainId);
     const swapAvailable =
-      !isTestnetAsset && (isNative || swapSupportedFamily);
+      !isTestnetAsset && (isNative || swapSupportedFamily || isBridgeSource);
     const showSwapUnavailableNote =
       !isNative && !isTestnetAsset && !swapAvailable && !isWatchOnlyAccount;
 

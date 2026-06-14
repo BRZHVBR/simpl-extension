@@ -26,6 +26,9 @@ import { SettingsPage } from "./routes/SettingsPage";
 import { ReceivePage } from "./routes/ReceivePage";
 import { openSidePanel } from "./surface-actions";
 import { SwapPage } from "./routes/SwapPage";
+import { BridgePage } from "./routes/BridgePage";
+import { isTronChainId } from "../core/networks/chain-registry";
+import { LIFI_TRON_NATIVE_ADDRESS } from "../core/bridge/lifi-bridge.service";
 
 export type PopupRoute =
   | "welcome"
@@ -36,6 +39,7 @@ export type PopupRoute =
   | "receive"
   | "send"
   | "swap"
+  | "bridge"
   | "accounts"
   | "add-account"
   | "account-details"
@@ -85,6 +89,10 @@ export function App() {
   const [swapToAsset, setSwapToAsset] = useState<WalletAssetBalance | null>(
     null,
   );
+  // Asset preselected as the cross-chain bridge SOURCE (FROM) when Swap is opened
+  // for a TRON asset — TRON has no same-chain swap, so it goes to BridgePage.
+  const [bridgeFromAsset, setBridgeFromAsset] =
+    useState<WalletAssetBalance | null>(null);
   // Asset preselected when Receive is opened from asset details. null when
   // Receive is opened from the main action (defaults to native asset).
   const [receiveAsset, setReceiveAsset] = useState<WalletAssetBalance | null>(
@@ -170,6 +178,15 @@ export function App() {
   // selected network is aligned to the asset's chain. With no asset (main
   // Swap action) the page keeps its default token pair.
   async function openSwapPage(asset?: WalletAssetBalance) {
+    // TRON has no same-chain swap; its assets are cross-chain BRIDGE SOURCES via
+    // LI.FI. Open the cross-chain BridgePage with the asset preselected as the
+    // FROM token — never the 0x same-chain SwapPage (which 400s for TRON).
+    if (asset && isTronChainId(asset.chainId)) {
+      setSwapToAsset(null);
+      setBridgeFromAsset(asset);
+      setRoute("bridge");
+      return;
+    }
     if (asset) {
       if (asset.chainId !== viewState?.walletState?.selectedChainId) {
         await walletService.setSelectedChainId(asset.chainId);
@@ -297,6 +314,39 @@ export function App() {
       }}
     />
   );
+
+      case "bridge": {
+        if (!viewState.walletState || !bridgeFromAsset) {
+          return null;
+        }
+        const fromAsset = bridgeFromAsset;
+        const fromIsNative = fromAsset.contractAddress == null;
+        return (
+          <BridgePage
+            selectedAccount={viewState.selectedAccount}
+            walletState={viewState.walletState}
+            initialFromChainId={fromAsset.chainId}
+            initialFromToken={{
+              chainId: fromAsset.chainId,
+              // Native TRX uses LI.FI's base58 sentinel; a TRC-20 uses its
+              // contract address (which is LI.FI's identifier).
+              address: fromIsNative
+                ? LIFI_TRON_NATIVE_ADDRESS
+                : (fromAsset.contractAddress as string),
+              symbol: fromAsset.symbol,
+              name: fromAsset.name,
+              decimals: fromAsset.decimals,
+              isNative: fromIsNative,
+              logoUrl: fromAsset.logoUrl ?? null,
+            }}
+            onBridgeCompleted={syncViewState}
+            onBack={() => {
+              setBridgeFromAsset(null);
+              setRoute("home");
+            }}
+          />
+        );
+      }
 
 
       case "transaction-history":
