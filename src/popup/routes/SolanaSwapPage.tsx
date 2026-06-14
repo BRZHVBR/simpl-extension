@@ -405,6 +405,12 @@ export function SolanaSwapPage({
     if (!solanaAddress) return "Solana address unavailable for this account.";
     if (!fromToken || !toToken) return "Select tokens to swap.";
     if (fromToken.mint === toToken.mint) return "Choose two different tokens.";
+    // The discovered Wrapped SOL token (non-native, NATIVE_MINT) can't be swapped
+    // directly here — Jupiter wrap/unwrap expects native SOL. Show a clear,
+    // non-generic message instead of a vague "Could not prepare this swap".
+    if (!fromToken.isNative && fromToken.mint === SOL_WSOL_MINT) {
+      return "Unwrap SOL first, then swap SOL.";
+    }
 
     // Native SOL with a balance that can't even cover the fee reserve: no SOL
     // swap is possible regardless of the amount entered.
