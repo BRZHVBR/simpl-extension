@@ -662,6 +662,8 @@ export function BridgePage({
   const [bridgeProgress, setBridgeProgress] = useState<
     "pending" | "confirmed" | "failed"
   >("pending");
+  // 1.5s "Copied" feedback for the source tx hash on the success screen.
+  const [hashCopied, setHashCopied] = useState(false);
 
   const fromChain = useMemo(
     () => chains.find((c) => c.id === fromChainId),
@@ -2041,7 +2043,23 @@ export function BridgePage({
     setApprovalState("unknown");
     setSubmitStatus("idle");
     setBridgeProgress("pending");
+    setHashCopied(false);
     wsolSetupSigRef.current = null;
+  }
+
+  // Copy the source tx hash to the clipboard with brief "Copied" feedback. The
+  // hash is a public identifier (never key/seed material), safe to copy.
+  function handleCopyHash() {
+    if (!txHash) return;
+    void navigator.clipboard
+      ?.writeText(txHash)
+      .then(() => {
+        setHashCopied(true);
+        window.setTimeout(() => setHashCopied(false), 1500);
+      })
+      .catch(() => {
+        // Clipboard unavailable — leave the hash visible for manual copy.
+      });
   }
 
   const estReceive = useMemo(() => {
@@ -2067,8 +2085,49 @@ export function BridgePage({
   const fromDisplaySymbol = fromIsSolNative ? "SOL" : fromToken?.symbol;
   const fromDisplayName = fromIsSolNative ? "Solana" : fromToken?.name;
 
+  // High-fee warning for small stablecoin routes: when the estimated output is
+  // worth materially less than the input (≈ USD, since both are stablecoins),
+  // warn that the route's fixed costs dominate. < 80% of input → warn. Integer
+  // math across differing decimals (BSC USDT 18 → TRON USDT 6).
+  //
+  // MUST stay above the `step === "success"` early return below — every hook in
+  // this component has to run on every render, in the same order. Declaring it
+  // after the early return makes React render fewer hooks once the bridge submit
+  // flips `step` to "success", which crashes with minified error #300.
+  const highFeeWarning = useMemo(() => {
+    if (!quote || !fromToken || !toToken) return false;
+    if (!isStablecoinSymbol(fromToken.symbol) || !isStablecoinSymbol(toToken.symbol)) {
+      return false;
+    }
+    if (!quote.toAmountBaseUnits) return false;
+    try {
+      const inAmt = BigInt(quote.fromAmountBaseUnits);
+      const outAmt = BigInt(quote.toAmountBaseUnits);
+      if (inAmt <= 0n || outAmt < 0n) return false;
+      // out/10^outDec < 0.8 · in/10^inDec
+      //   ⇔ out · 10^inDec · 100 < 80 · in · 10^outDec   (integer-safe)
+      const left = outAmt * 10n ** BigInt(quote.fromTokenDecimals) * 100n;
+      const right = 80n * inAmt * 10n ** BigInt(quote.toTokenDecimals);
+      return left < right;
+    } catch {
+      return false;
+    }
+  }, [quote, fromToken, toToken]);
+
   // ── Success screen ──
   if (step === "success") {
+    // Safe, opt-in render diagnostics (simpl.debug.bridge). Address-free and
+    // payload-free: only chain ids, chain types, the tx FORMAT, whether a source
+    // tx hash exists, and the current bridge status — never keys/seed/raw tx.
+    bridgeDebugLog("page:submitted-render", {
+      fromChain: fromChainId,
+      toChain: toChainId,
+      sourceChainType: quote?.sourceChainType ?? null,
+      destinationChainType: quote?.destinationChainType ?? null,
+      txFormat: quote?.txFormat ?? null,
+      hasTxHash: Boolean(txHash),
+      bridgeStatus: bridgeProgress,
+    });
     const statusTitle =
       bridgeProgress === "confirmed"
         ? "Cross-chain swap completed"
@@ -2111,6 +2170,25 @@ export function BridgePage({
                     : "In progress"}
               </strong>
             </div>
+            {/* Source tx hash — always shown when broadcast succeeded, even if
+                the route has no explorer URL. Defensive fallback so a submitted
+                bridge never leaves the user without a reference to their tx. */}
+            {txHash ? (
+              <div className="swap-quote-row swap-quote-row--route">
+                <span>Source tx</span>
+                <button
+                  type="button"
+                  className="swap-percent-chip"
+                  onClick={handleCopyHash}
+                  title={txHash}
+                  style={{ fontWeight: 600 }}
+                >
+                  {hashCopied
+                    ? "Copied"
+                    : `${txHash.slice(0, 6)}…${txHash.slice(-6)}`}
+                </button>
+              </div>
+            ) : null}
           </div>
           <SwapRouteNotice>
             Cross-chain route powered by LI.FI. This may take longer than a
@@ -2148,30 +2226,6 @@ export function BridgePage({
   }
 
   const previewOnly = Boolean(quote) && !quote?.executable;
-
-  // High-fee warning for small stablecoin routes: when the estimated output is
-  // worth materially less than the input (≈ USD, since both are stablecoins),
-  // warn that the route's fixed costs dominate. < 80% of input → warn. Integer
-  // math across differing decimals (BSC USDT 18 → TRON USDT 6).
-  const highFeeWarning = useMemo(() => {
-    if (!quote || !fromToken || !toToken) return false;
-    if (!isStablecoinSymbol(fromToken.symbol) || !isStablecoinSymbol(toToken.symbol)) {
-      return false;
-    }
-    if (!quote.toAmountBaseUnits) return false;
-    try {
-      const inAmt = BigInt(quote.fromAmountBaseUnits);
-      const outAmt = BigInt(quote.toAmountBaseUnits);
-      if (inAmt <= 0n || outAmt < 0n) return false;
-      // out/10^outDec < 0.8 · in/10^inDec
-      //   ⇔ out · 10^inDec · 100 < 80 · in · 10^outDec   (integer-safe)
-      const left = outAmt * 10n ** BigInt(quote.fromTokenDecimals) * 100n;
-      const right = 80n * inAmt * 10n ** BigInt(quote.toTokenDecimals);
-      return left < right;
-    } catch {
-      return false;
-    }
-  }, [quote, fromToken, toToken]);
 
   const isBusy =
     submitStatus === "preparingAccount" ||
