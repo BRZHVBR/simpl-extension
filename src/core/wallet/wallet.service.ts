@@ -127,6 +127,8 @@ import {
   type PreparedTransactionRequest,
   type SendPreparedTransactionResult,
 } from "../transactions/send-asset.service";
+import { encodeErc20ApproveData } from "../bridge/evm-bridge.service";
+import { readErc20Allowance } from "../balances/chain-balance.service";
 import { vaultService } from "../vault/vault.service";
 import { encryptionService } from "../vault/encryption.service";
 import type { EncryptedVault, VaultPayload } from "../vault/vault.types";
@@ -1067,6 +1069,64 @@ export class WalletService {
       chainId: input.chainId,
       waitForReceipt: input.waitForReceipt,
     });
+  }
+
+  // Approve an ERC-20 source token for a bridge spender (the LI.FI approvalAddress)
+  // on an EXPLICIT source chain, then wait for the receipt. Handles USDT-style
+  // tokens that reject a non-zero → non-zero approve: if the first approve fails
+  // AND a non-zero allowance already exists, it resets the allowance to 0 and
+  // re-approves. Scoped to the ERC-20 approval path — the bridge send is separate.
+  async executeSelectedEvmBridgeApproval(input: {
+    chainId: number;
+    tokenAddress: string;
+    spender: string;
+    amountBaseUnits: string;
+    password?: string;
+  }): Promise<{ hash: string }> {
+    const walletState = await this.storage.getWalletState();
+    const selectedAccount = this.getRequiredSelectedAccount(walletState);
+
+    if (selectedAccount.type === "watch") {
+      throw new Error("Watch-only wallet cannot send transactions.");
+    }
+
+    const privateKey = await this.getPrivateKeyForAccount(
+      selectedAccount,
+      input.password,
+    );
+
+    const sendApprove = (amountBaseUnits: string) =>
+      sendAssetService.sendPreparedTransaction({
+        transaction: {
+          to: input.tokenAddress,
+          data: encodeErc20ApproveData(input.spender, amountBaseUnits),
+          value: "0",
+        },
+        privateKey,
+        fromAddress: selectedAccount.address,
+        chainId: input.chainId,
+        waitForReceipt: true,
+      });
+
+    try {
+      const res = await sendApprove(input.amountBaseUnits);
+      return { hash: res.hash };
+    } catch (error) {
+      // USDT-style tokens reject approve(nonzero) while a non-zero allowance is
+      // already set. If that's the case, reset to 0 first, then re-approve.
+      const allowance = await readErc20Allowance({
+        chainId: input.chainId,
+        tokenAddress: input.tokenAddress,
+        owner: selectedAccount.address,
+        spender: input.spender,
+      }).catch(() => null);
+      if (allowance != null && allowance > 0n) {
+        await sendApprove("0");
+        const res = await sendApprove(input.amountBaseUnits);
+        return { hash: res.hash };
+      }
+      throw error;
+    }
   }
 
   async signSelectedTypedDataV4(input: {

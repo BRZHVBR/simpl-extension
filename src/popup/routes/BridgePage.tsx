@@ -41,6 +41,11 @@ import { readTrc20Allowance } from "../../chains/tron/tron.bridge";
 import { TronError } from "../../chains/tron/tron.errors";
 import { isValidTronAddress } from "../../chains/tron/tron.address";
 import {
+  preflightEvmBridgeTransaction,
+  recordEvmBridgeTxHash,
+  EvmBridgeError,
+} from "../../core/bridge/evm-bridge.service";
+import {
   SOLANA_MAINNET,
   SOL_FEE_RESERVE_LAMPORTS,
   getSolanaTransactionExplorerUrl,
@@ -131,6 +136,7 @@ type SubmitStatus =
   | "idle"
   | "preparingAccount"
   | "preparing"
+  | "simulating"
   | "signing"
   | "submitting"
   | "error";
@@ -204,14 +210,6 @@ function formatDuration(seconds: number | null): string | null {
   return `~${Math.round(seconds / 60)} min`;
 }
 
-// approve(address spender, uint256 amount) calldata.
-function encodeErc20Approve(spender: string, amountBaseUnits: string): string {
-  const selector = "095ea7b3";
-  const addr = spender.toLowerCase().replace(/^0x/u, "").padStart(64, "0");
-  const amt = BigInt(amountBaseUnits).toString(16).padStart(64, "0");
-  return `0x${selector}${addr}${amt}`;
-}
-
 // Map any failure to a short, user-facing message. NEVER returns the raw
 // provider/ethers string — unknown failures collapse to a generic line so no
 // JSON / calldata / revert dump / stack text can ever reach the UI.
@@ -279,6 +277,28 @@ function friendlyError(error: unknown): string {
         return "Watch-only accounts cannot swap.";
       default:
         return error.message;
+    }
+  }
+  // Coded EVM bridge preflight errors carry precise, display-safe messages so a
+  // reverted/under-approved EVM route is never flattened to a generic "unknown".
+  if (error instanceof EvmBridgeError) {
+    switch (error.code) {
+      case "EVM_ALLOWANCE_REQUIRED":
+        return error.message || "Token approval required.";
+      case "EVM_INSUFFICIENT_TOKEN_BALANCE":
+        return error.message || "Not enough token balance.";
+      case "EVM_INSUFFICIENT_NATIVE_GAS":
+        return error.message || "Not enough native balance for network fees.";
+      case "EVM_CHAIN_MISMATCH":
+        return "Bridge transaction is for a different chain.";
+      case "EVM_REVERT":
+        return error.revertReason
+          ? `Bridge transaction reverted during simulation: ${error.revertReason}`
+          : "Bridge transaction reverted during simulation.";
+      case "EVM_RPC_UNAVAILABLE":
+        return error.message || "Source chain RPC is temporarily unavailable.";
+      default:
+        return "Bridge transaction simulation failed. Try a fresh quote or a smaller amount.";
     }
   }
   // Coded TRON execution errors carry curated, display-safe messages.
@@ -1038,8 +1058,24 @@ export function BridgePage({
     }
   }
 
+  // Resolve the ERC-20 bridge spender to approve: the LI.FI approvalAddress, or
+  // (when the provider omitted it) the route's transactionRequest.to — for LI.FI
+  // that IS the contract that pulls the tokens. Never the 0x swap allowanceTarget.
+  function resolveEvmSpender(q: BridgeQuote | null): string | null {
+    return q?.approvalAddress ?? q?.transactionRequest?.to ?? null;
+  }
+
   async function handleApprove() {
-    if (!quote?.approvalAddress || !fromToken) return;
+    if (!quote || !fromToken) return;
+    const spender =
+      quote.txFormat === "tron"
+        ? quote.approvalAddress
+        : resolveEvmSpender(quote);
+    if (!spender) {
+      setApprovalState("needed");
+      setError("Could not resolve the approval spender for this route.");
+      return;
+    }
     setError(null);
     setApprovalState("approving");
     try {
@@ -1049,20 +1085,18 @@ export function BridgePage({
       if (quote.txFormat === "tron") {
         await walletService.executeSelectedTronBridgeApproval({
           contractAddress: fromToken.address,
-          spender: quote.approvalAddress,
+          spender,
           amountBaseUnits: amountBase.toString(),
         });
         setApprovalState("approved");
         return;
       }
-      const data = encodeErc20Approve(
-        quote.approvalAddress,
-        amountBase.toString(),
-      );
-      await walletService.sendPreparedTransactionForChain({
-        transaction: { to: fromToken.address, data, value: "0" },
+      // EVM ERC-20 approval (handles USDT reset-to-0 → re-approve internally).
+      await walletService.executeSelectedEvmBridgeApproval({
         chainId: fromChainId,
-        waitForReceipt: true,
+        tokenAddress: fromToken.address,
+        spender,
+        amountBaseUnits: amountBase.toString(),
       });
       setApprovalState("approved");
     } catch (e) {
@@ -1215,6 +1249,8 @@ export function BridgePage({
       },
       chainId: fromChainId,
     });
+    // Attach the broadcast hash to the EVM preflight debug snapshot.
+    recordEvmBridgeTxHash(result.hash);
     return {
       resultHash: result.hash,
       resultExplorerUrl: result.explorerUrl,
@@ -1589,6 +1625,51 @@ export function BridgePage({
       }
     }
 
+    // EVM source: simulate (eth_call + estimateGas) BEFORE broadcasting so a
+    // revert / missing allowance / gas shortfall is classified into a precise,
+    // display-safe reason instead of a flattened "unknown". An allowance shortfall
+    // flips the UI back to the Approve step; other classified failures stop here.
+    if (prepared.txFormat === "evm" && prepared.transactionRequest && evmAddress) {
+      setSubmitStatus("simulating");
+      try {
+        await preflightEvmBridgeTransaction({
+          fromChainId,
+          txChainId: prepared.transactionRequest.chainId,
+          fromAddress: evmAddress,
+          to: prepared.transactionRequest.to,
+          data: prepared.transactionRequest.data,
+          value: prepared.transactionRequest.value,
+          tokenAddress: fromToken.isNative ? null : fromToken.address,
+          tokenSymbol: fromToken.symbol,
+          tokenDecimals: fromToken.decimals,
+          fromAmountBaseUnits: prepared.fromAmountBaseUnits,
+          spender: resolveEvmSpender(prepared),
+          nativeSymbol: fromChain?.nativeSymbol || "ETH",
+          tool: prepared.toolName,
+          gasLimit: prepared.transactionRequest.gasLimit,
+          gasPrice: prepared.transactionRequest.gasPrice,
+          maxFeePerGas: prepared.transactionRequest.maxFeePerGas,
+          maxPriorityFeePerGas: prepared.transactionRequest.maxPriorityFeePerGas,
+        });
+      } catch (e) {
+        bridgeDebugLog("page:preflight-error", {
+          fromChain: fromChainId,
+          toChain: toChainId,
+          code: e instanceof EvmBridgeError ? e.code : "unknown",
+        });
+        if (e instanceof EvmBridgeError && e.code === "EVM_ALLOWANCE_REQUIRED") {
+          // Allowance is short — show Approve again rather than a hard error.
+          setApprovalState("needed");
+          setSubmitStatus("idle");
+          setError(friendlyError(e));
+          return;
+        }
+        setSubmitStatus("error");
+        setError(friendlyError(e));
+        return;
+      }
+    }
+
     // d–h: sign → simulate → broadcast → watch (the wallet-service Solana
     // pipeline does freshness/sign/simulate/broadcast; EVM goes through the send
     // service). On a stale Solana blockhash we auto-refresh the quote ONCE and
@@ -1836,6 +1917,7 @@ export function BridgePage({
   const isBusy =
     submitStatus === "preparingAccount" ||
     submitStatus === "preparing" ||
+    submitStatus === "simulating" ||
     submitStatus === "submitting" ||
     approvalState === "approving";
 
@@ -2132,7 +2214,7 @@ export function BridgePage({
               onClick={handleApprove}
             >
               {approvalState === "approving"
-                ? "Approving…"
+                ? `Approving ${fromToken?.symbol ?? "token"}…`
                 : `Approve ${fromToken?.symbol ?? "token"}`}
             </button>
           ) : (
@@ -2150,15 +2232,17 @@ export function BridgePage({
                   ? "Preparing SOL account…"
                   : submitStatus === "preparing"
                     ? "Preparing fresh route…"
-                    : submitStatus === "signing"
-                      ? "Waiting for signature…"
-                      : submitStatus === "submitting"
-                        ? "Broadcasting…"
-                        : submitStatus === "error"
-                          ? "Get a fresh quote"
-                          : approvalState === "checking"
-                            ? "Checking allowance…"
-                            : "Confirm swap"}
+                    : submitStatus === "simulating"
+                      ? "Simulating transaction…"
+                      : submitStatus === "signing"
+                        ? "Waiting for signature…"
+                        : submitStatus === "submitting"
+                          ? "Broadcasting…"
+                          : submitStatus === "error"
+                            ? "Get a fresh quote"
+                            : approvalState === "checking"
+                              ? "Checking allowance…"
+                              : "Confirm swap"}
             </button>
           )}
         </div>

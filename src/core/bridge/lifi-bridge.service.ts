@@ -454,6 +454,13 @@ export type BridgeTransactionRequest = {
   data: string;
   value: string;
   chainId: number;
+  // Optional gas hints LI.FI may include on the route — surfaced for diagnostics
+  // and an affordability preflight (estimateGas remains authoritative for the
+  // actual send). Decimal or hex strings, as the provider returned them.
+  gasLimit: string | null;
+  gasPrice: string | null;
+  maxFeePerGas: string | null;
+  maxPriorityFeePerGas: string | null;
 };
 
 // A display-safe, normalized quote. Deliberately omits API keys, referral
@@ -557,6 +564,8 @@ type RawTxRequest = {
   chainId?: number;
   gasLimit?: string;
   gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
   // Gateway-normalized format hint: "evm" | "solana" | "non-evm". When absent we
   // infer EVM from the presence of an EVM `to` + `data`.
   format?: string;
@@ -593,6 +602,9 @@ type RawBridgeQuote = {
     feeCosts?: RawFeeCost[];
   } | null;
   transactionRequest?: RawTxRequest | null;
+  // Some providers surface the ERC-20 approval spender at the root rather than
+  // (or in addition to) estimate.approvalAddress.
+  approvalAddress?: string;
   // Some gateway/provider variants mirror the destination amount + token at the
   // ROOT instead of (or in addition to) `estimate`/`action`. Used as fallbacks.
   toAmount?: string | number;
@@ -689,11 +701,17 @@ function normalizeTxRequest(
   if (!raw || typeof raw.to !== "string" || typeof raw.data !== "string") {
     return null;
   }
+  const gasStr = (v: unknown): string | null =>
+    typeof v === "string" && v !== "" ? v : null;
   return {
     to: raw.to,
     data: raw.data,
     value: raw.value ?? "0",
     chainId: typeof raw.chainId === "number" ? raw.chainId : fallbackChainId,
+    gasLimit: gasStr(raw.gasLimit),
+    gasPrice: gasStr(raw.gasPrice),
+    maxFeePerGas: gasStr(raw.maxFeePerGas),
+    maxPriorityFeePerGas: gasStr(raw.maxPriorityFeePerGas),
   };
 }
 
@@ -832,6 +850,30 @@ function extractSolanaTxFromQuote(raw: RawBridgeQuote): SolanaQuoteExtraction {
       deserError: "no decodable serialized-tx field in any known location",
     };
   return { ok: false, requiresBuild, shapeSummary };
+}
+
+// Resolve the ERC-20 approval spender for an EVM-source route, robustly across
+// provider shapes: estimate.approvalAddress, a root-level approvalAddress, then
+// any includedStep's estimate.approvalAddress. LI.FI's allowance target is NOT
+// the 0x swap allowanceTarget — it is this bridge spender. Returns null when none
+// is present (a native-asset source, or a route that needs no approval).
+function resolveApprovalAddress(raw: RawBridgeQuote): string | null {
+  const fromEstimate = raw.estimate?.approvalAddress;
+  if (typeof fromEstimate === "string" && fromEstimate) return fromEstimate;
+  if (typeof raw.approvalAddress === "string" && raw.approvalAddress) {
+    return raw.approvalAddress;
+  }
+  const steps = Array.isArray(raw.includedSteps)
+    ? raw.includedSteps
+    : Array.isArray(raw.steps)
+      ? raw.steps
+      : [];
+  for (const step of steps) {
+    const so = (step ?? {}) as { estimate?: { approvalAddress?: unknown } };
+    const addr = so.estimate?.approvalAddress;
+    if (typeof addr === "string" && addr) return addr;
+  }
+  return null;
 }
 
 function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
@@ -1039,10 +1081,7 @@ function normalizeQuote(raw: RawBridgeQuote): BridgeQuote {
       typeof estimate.executionDuration === "number"
         ? estimate.executionDuration
         : null,
-    approvalAddress:
-      typeof estimate.approvalAddress === "string"
-        ? estimate.approvalAddress
-        : null,
+    approvalAddress: resolveApprovalAddress(raw),
     transactionRequest: txRequest,
     txFormat,
     solanaTransactionData,
