@@ -50,6 +50,8 @@ import {
 import {
   getTronTransactionExplorerUrl,
   TRC20_DEFAULT_FEE_LIMIT_SUN,
+  TRC20_APPROVE_MIN_TRX_SUN,
+  TRC20_APPROVE_ENERGY_ESTIMATE,
 } from "../../chains/tron/tron.config";
 import {
   preflightEvmBridgeTransaction,
@@ -751,6 +753,11 @@ export function BridgePage({
   const [approvalState, setApprovalState] = useState<ApprovalState>("unknown");
   // The broadcast TRON approve tx id (shown + linked while awaiting confirmation).
   const [approvalTxId, setApprovalTxId] = useState<string | null>(null);
+  // True when a TRON approve can't proceed for lack of TRX/Energy (preflight
+  // INSUFFICIENT_TRX_BALANCE, or a confirmed OUT_OF_ENERGY failure). Disables the
+  // Approve CTA so the user can't re-broadcast a doomed tx; cleared by the helper
+  // "retry" action or any input change.
+  const [approvalFeeBlocked, setApprovalFeeBlocked] = useState(false);
   // In-flight TRON approval (keyed by token+owner+spender+amount) for dedupe +
   // recovery — survives re-renders so a second Approve click resumes the same tx.
   const pendingApprovalRef = useRef<{ key: string; txId: string } | null>(null);
@@ -1057,6 +1064,7 @@ export function BridgePage({
     setQuoteBlock(null);
     setApprovalState("unknown");
     setApprovalTxId(null);
+    setApprovalFeeBlocked(false);
     pendingApprovalRef.current = null;
     setSubmitStatus("idle");
     // Inputs changed → a previously unsupported request may now differ; allow a
@@ -1535,6 +1543,9 @@ export function BridgePage({
       // so a retry broadcasts a fresh tx (never re-uses the failed one).
       pendingApprovalRef.current = null;
       setApprovalState("needed");
+      // A confirmed OUT_OF_ENERGY failure is the same root cause as the preflight
+      // block (no TRX/Energy) → block the CTA + show the same helper guidance.
+      if (reasonCode === "OUT_OF_ENERGY") setApprovalFeeBlocked(true);
       setError(
         reasonCode === "OUT_OF_ENERGY"
           ? "Approval failed: not enough TRX/Energy for network fees. Add TRX or rent Energy, then try again."
@@ -1580,6 +1591,9 @@ export function BridgePage({
 
   async function handleApprove() {
     if (!quote || !fromToken) return;
+    // Never attempt an approve while the TRX/Energy fee block is active — the CTA
+    // is disabled, but guard here too so nothing can broadcast a doomed tx.
+    if (approvalFeeBlocked) return;
     const spender =
       quote.txFormat === "tron"
         ? quote.approvalAddress
@@ -1633,6 +1647,14 @@ export function BridgePage({
         } catch (e) {
           setApprovalState("needed");
           setError(friendlyError(e));
+          // Preflight refused (no TRX/Energy) → block the CTA + show the helper.
+          if (e instanceof TronError && e.code === "INSUFFICIENT_TRX_BALANCE") {
+            setApprovalFeeBlocked(true);
+            tronApproveLog("approve-fee-blocked", {
+              chainId: fromChainId,
+              reasonCode: "INSUFFICIENT_TRX_BALANCE",
+            });
+          }
           return;
         }
         pendingApprovalRef.current = { key, txId: result.txId };
@@ -2387,11 +2409,21 @@ export function BridgePage({
     setError(null);
     setApprovalState("unknown");
     setApprovalTxId(null);
+    setApprovalFeeBlocked(false);
     pendingApprovalRef.current = null;
     setSubmitStatus("idle");
     setBridgeProgress("pending");
     setHashCopied(false);
     wsolSetupSigRef.current = null;
+  }
+
+  // Helper "retry" after the user adds TRX/Energy: clears the fee block + error
+  // and re-reads balances, so the Approve CTA re-enables (the next click re-runs
+  // the TRX/Energy preflight, which re-blocks if it's still insufficient).
+  function handleApprovalFeeRetry() {
+    setApprovalFeeBlocked(false);
+    setError(null);
+    setBalanceReloadKey((k) => k + 1);
   }
 
   // Copy the source tx hash to the clipboard with brief "Copied" feedback. The
@@ -2581,6 +2613,12 @@ export function BridgePage({
     submitStatus === "submitting" ||
     approvalState === "approving" ||
     approvalState === "submitted";
+
+  // Recommended TRON fee headroom for the helper notice — derived from the SAME
+  // preflight constants the wallet service gates on (single source of truth).
+  const recommendedTrx = Number(TRC20_APPROVE_MIN_TRX_SUN) / 1_000_000;
+  const recommendedEnergy =
+    TRC20_APPROVE_ENERGY_ESTIMATE.toLocaleString("en-US");
 
   return (
     <div className="ext-popup swap-page" data-screen-label="Swap – Cross-chain">
@@ -2906,6 +2944,23 @@ export function BridgePage({
           </div>
         ) : null}
 
+        {/* TRON fee/energy block — actionable guidance + recommendation + a retry
+            once the user has topped up. The Approve CTA stays disabled meanwhile. */}
+        {approvalFeeBlocked ? (
+          <SwapRouteNotice variant="warning">
+            TRON approvals require TRX or Energy for network fees. Add TRX to this
+            wallet or rent Energy, then try again. Recommended: {recommendedTrx}{" "}
+            TRX or {recommendedEnergy} Energy.{" "}
+            <button
+              type="button"
+              className="swap-percent-chip"
+              onClick={handleApprovalFeeRetry}
+            >
+              I’ve added TRX — retry
+            </button>
+          </SwapRouteNotice>
+        ) : null}
+
         {/* Dev-only hint pointing at the safe Solana payload diagnostics. */}
         {import.meta.env.DEV &&
         step === "review" &&
@@ -2948,7 +3003,9 @@ export function BridgePage({
               className="btn primary lg full"
               type="button"
               disabled={
-                approvalState === "approving" || approvalState === "submitted"
+                approvalState === "approving" ||
+                approvalState === "submitted" ||
+                approvalFeeBlocked
               }
               onClick={handleApprove}
             >
@@ -2956,7 +3013,9 @@ export function BridgePage({
                 ? `Approving ${fromToken?.symbol ?? "token"}…`
                 : approvalState === "submitted"
                   ? `Approving ${fromToken?.symbol ?? "token"}…`
-                  : `Approve ${fromToken?.symbol ?? "token"}`}
+                  : approvalFeeBlocked
+                    ? "Add TRX to continue"
+                    : `Approve ${fromToken?.symbol ?? "token"}`}
             </button>
           ) : (
             <button
