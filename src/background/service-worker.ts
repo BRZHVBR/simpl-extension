@@ -5,7 +5,12 @@
 import "../polyfills/buffer";
 import { walletService } from "../core/wallet/wallet.service";
 import { storageRepository } from "../core/storage/storage.repository";
-import { getChainById, TRON_MAINNET_CHAIN_ID } from "../core/networks/chain-registry";
+import {
+  getChainById,
+  TRON_MAINNET_CHAIN_ID,
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+} from "../core/networks/chain-registry";
 import type { WalletAccount } from "../core/accounts/account.types";
 
 // Message Settings sends after the user changes "Default open mode" so the
@@ -707,22 +712,57 @@ function extractTronTxDisplay(tx: unknown): {
   }
 }
 
-// Map an internal account record → safe, PUBLIC metadata for a connected dApp.
-// Intentionally narrow: id, address, label, type, isActive only. NEVER includes
-// key material, mnemonic, derivation paths, or any private wallet data.
-function toSafeAccountMeta(account: WalletAccount, selectedAccountId: string | null) {
-  const typeMap: Record<WalletAccount["type"], "owned" | "imported" | "watch-only"> = {
-    mnemonic: "owned",
+// Public, sanitized account metadata handed to a connected first-party surface
+// (the SIMPL dashboard). ONLY public data: id, display name, type, active flag,
+// avatar seed, and public chain addresses. NEVER key material, mnemonic,
+// derivation paths, encrypted vault, or raw storage records.
+type SimplDashboardAccount = {
+  id: string;
+  name: string;
+  type: "primary" | "imported" | "watch-only";
+  isActive: boolean;
+  avatarSeed: string;
+  addresses: {
+    evm?: string;
+    tron?: string;
+    btc?: string;
+    btcTestnet?: string;
+    solana?: string;
+    ton?: string;
+  };
+};
+
+function toSafeAccountMeta(
+  account: WalletAccount,
+  selectedAccountId: string | null,
+): SimplDashboardAccount {
+  const typeMap: Record<WalletAccount["type"], SimplDashboardAccount["type"]> = {
+    mnemonic: "primary",
     importedMnemonic: "imported",
     privateKey: "imported",
     watch: "watch-only",
   };
+
+  // Only addresses already derived + persisted on the record are exposed — this
+  // never triggers derivation and never touches key material.
+  const addresses: SimplDashboardAccount["addresses"] = { evm: account.address };
+  if ("tronAddress" in account && account.tronAddress) addresses.tron = account.tronAddress;
+  if ("solanaAddress" in account && account.solanaAddress) addresses.solana = account.solanaAddress;
+  if ("tonAddress" in account && account.tonAddress) addresses.ton = account.tonAddress;
+  if ("bitcoinAddresses" in account && account.bitcoinAddresses) {
+    const mainnet = account.bitcoinAddresses[BITCOIN_MAINNET_CHAIN_ID];
+    const testnet = account.bitcoinAddresses[BITCOIN_TESTNET_CHAIN_ID];
+    if (mainnet?.receive) addresses.btc = mainnet.receive;
+    if (testnet?.receive) addresses.btcTestnet = testnet.receive;
+  }
+
   return {
     id: account.id,
-    address: account.address,
-    label: account.label,
+    name: account.label,
     type: typeMap[account.type],
     isActive: account.id === selectedAccountId,
+    avatarSeed: account.address,
+    addresses,
   };
 }
 
