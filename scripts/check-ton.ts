@@ -48,6 +48,12 @@ const {
   getTonJettonExplorerUrl,
 } = await import("../src/chains/ton/ton.config");
 const { tonApiClient } = await import("../src/core/ton/tonApiClient");
+const { getTonNativeSpot, getTonNativeHistory } = await import(
+  "../src/chains/ton/ton.prices"
+);
+const { marketDataService } = await import(
+  "../src/core/prices/market-data.service"
+);
 const { Address } = await import("@ton/core");
 
 let failures = 0;
@@ -428,6 +434,103 @@ ok(
   "empty DTO → submitted",
   mapTonTxStatus({}) === "submitted",
 );
+
+console.log(
+  "=== ton price routing (TON proxy only — no generic gateway leak) ===",
+);
+{
+  // Capture every fetch URL and serve canned TON-proxy responses so we can
+  // assert exactly which endpoints the TON price paths hit — and which they
+  // must never touch. The generic gateway routes are intentionally NOT served:
+  // any TON call that reaches them would record a URL the assertions reject.
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: string[] = [];
+  const installStub = (handler: (url: string) => unknown): void => {
+    globalThis.fetch = (async (input: unknown) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : (input as { url?: string })?.url ?? String(input);
+      fetchCalls.push(url);
+      const data = handler(url);
+      return {
+        ok: data != null,
+        status: data != null ? 200 : 404,
+        json: async () => data,
+      } as Response;
+    }) as typeof fetch;
+  };
+
+  installStub((url) => {
+    if (url.includes("/v1/ton/prices/spot")) {
+      return { prices: { usd: 5.5, eur: 5.0 } };
+    }
+    if (url.includes("/v1/ton/prices/history")) {
+      // Proxy emits `timestamp` (not `t`) — exercise that mapping.
+      return {
+        points: [
+          { timestamp: 1_700_000_000, price: 5.1 },
+          { timestamp: 1_700_003_600, price: 5.2 },
+        ],
+      };
+    }
+    return null; // generic gateway routes deliberately unserved
+  });
+
+  try {
+    // --- spot ---
+    const spot = await getTonNativeSpot(TON_MAINNET, "usd");
+    ok("TON native spot resolves price (5.5)", spot?.price === 5.5);
+    ok(
+      "TON native spot hits /v1/ton/prices/spot",
+      fetchCalls.some((u) => u.includes("/v1/ton/prices/spot")),
+    );
+
+    // --- history ---
+    const hist = await getTonNativeHistory(TON_MAINNET, "7d");
+    ok(
+      "TON native history hits /v1/ton/prices/history?period=7d",
+      fetchCalls.some((u) => u.includes("/v1/ton/prices/history?period=7d")),
+    );
+    ok(
+      "TON history points map to chart data ({timestamp,price} → {t,price})",
+      Array.isArray(hist) &&
+        hist.length === 2 &&
+        hist[0].t === 1_700_000_000 &&
+        hist[0].price === 5.1,
+    );
+
+    // --- market data (the path that used to leak the generic spot call) ---
+    fetchCalls.length = 0;
+    const market = await marketDataService.getAssetMarketData({
+      chainId: TON_MAINNET_CHAIN_ID,
+      address: null,
+    });
+    ok("TON native market data resolves price (5.5)", market?.priceUsd === 5.5);
+    ok(
+      "missing 24h volume does not fail market mapping (volume omitted)",
+      market != null && market.volume24hUsd === undefined,
+    );
+    ok(
+      "TON native market data routes via /v1/ton/prices/spot",
+      fetchCalls.some((u) => u.includes("/v1/ton/prices/spot")),
+    );
+    ok(
+      "TON native must NOT call generic /v1/prices/spot",
+      !fetchCalls.some((u) => /\/v1\/prices\/spot/.test(u)),
+    );
+    ok(
+      "TON native must NOT call generic /v1/prices/ohlc",
+      !fetchCalls.some((u) => /\/v1\/prices\/ohlc/.test(u)),
+    );
+    ok(
+      "TON native must NOT send ?chainId=ton to the generic gateway",
+      !fetchCalls.some((u) => /chainId=ton/.test(u)),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
 
 console.log("");
 if (failures > 0) {

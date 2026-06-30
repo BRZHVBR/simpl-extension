@@ -44,8 +44,9 @@ export async function getTonNativeHistory(
 
   const points: { t: number; price: number }[] = [];
   for (const entry of payload.points) {
-    // Accept either the object form { t, price } or a [t, price] tuple.
-    const t = Array.isArray(entry) ? entry[0] : entry?.t;
+    // Accept the object form { t | timestamp, price } or a [t, price] tuple.
+    // The proxy emits `timestamp`; `t` is kept for compat.
+    const t = Array.isArray(entry) ? entry[0] : entry?.t ?? entry?.timestamp;
     const price = Array.isArray(entry) ? entry[1] : entry?.price;
     if (
       typeof t === "number" &&

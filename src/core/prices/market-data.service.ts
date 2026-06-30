@@ -18,6 +18,9 @@ import {
   resolvePriceIdentity,
 } from "./price-identity";
 import { getSpotPrice } from "./simpl-market-api.service";
+import { isTonChainId } from "../networks/chain-registry";
+import { getRequiredTonConfigByChainId } from "../../chains/ton/ton.config";
+import { getTonNativeSpot } from "../../chains/ton/ton.prices";
 
 export type AssetMarketData = {
   priceUsd?: number;
@@ -103,6 +106,16 @@ export class MarketDataService {
       return cached;
     }
 
+    // TON native is not served by the generic Simpl price gateway (it would
+    // 404 on `?chainId=ton`). Route its market data through the dedicated Simpl
+    // API TON proxy — same as the native-price and price-history services. The
+    // TON proxy exposes price only (no 24h volume / market cap yet), so those
+    // fields are omitted ("—" in the UI), never fabricated, and their absence
+    // must never block the price or the chart.
+    if (isTonChainId(input.chainId) && input.address === null) {
+      return this.getTonNativeMarketData(input, cached);
+    }
+
     try {
       const spot = await getSpotPrice({
         chainId: input.chainId,
@@ -169,6 +182,53 @@ export class MarketDataService {
       priceWarn("market error", {
         chainId: input.chainId,
         address: input.address,
+        error: String(error),
+      });
+      return cached;
+    }
+  }
+
+  // TON native market data via the Simpl API TON proxy (`/v1/ton/prices/spot`).
+  // Returns price only — the TON proxy does not expose 24h volume / market cap,
+  // so those fields are left off (rendered as "—") rather than zero-filled. A
+  // price success with no volume is still a valid result; the chart never
+  // depends on volume. Mirrors the gateway path's caching + degradation: a
+  // failure keeps stale cache so the UI doesn't flicker to "—".
+  private async getTonNativeMarketData(
+    input: MarketDataInput,
+    cached: AssetMarketData | null,
+  ): Promise<AssetMarketData | null> {
+    try {
+      const config = getRequiredTonConfigByChainId(input.chainId);
+      const usd = await getTonNativeSpot(config, "usd");
+
+      const priceUsd = usd?.price;
+      if (typeof priceUsd !== "number" || !Number.isFinite(priceUsd)) {
+        return cached;
+      }
+
+      const data: AssetMarketData = {
+        priceUsd,
+        source: "ton-proxy",
+        updatedAt: Date.now(),
+      };
+
+      // The TON proxy returns no volume / market cap today; carry forward any
+      // value we previously received so a later read doesn't wipe it (parity
+      // with the gateway path — no fabrication).
+      if (cached?.volume24hUsd != null) data.volume24hUsd = cached.volume24hUsd;
+      if (cached?.marketCapUsd != null) data.marketCapUsd = cached.marketCapUsd;
+
+      writeCache(input.chainId, input.address, data);
+      priceDebug("market ok (ton)", {
+        chainId: input.chainId,
+        priceUsd,
+        hasVolume: data.volume24hUsd != null,
+      });
+      return data;
+    } catch (error) {
+      priceWarn("market error (ton)", {
+        chainId: input.chainId,
         error: String(error),
       });
       return cached;

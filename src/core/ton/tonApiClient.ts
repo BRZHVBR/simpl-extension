@@ -96,7 +96,11 @@ export type TonSpotDto = {
 };
 
 export type TonPriceHistoryDto = {
-  points?: Array<{ t?: number; price?: number } | [number, number]>;
+  // Each point is { t | timestamp, price } or a [time, price] tuple. The proxy
+  // currently emits `timestamp`; `t` is accepted for forward/backward compat.
+  points?: Array<
+    { t?: number; timestamp?: number; price?: number } | [number, number]
+  >;
 };
 
 // --- Low-level fetch helpers --------------------------------------------

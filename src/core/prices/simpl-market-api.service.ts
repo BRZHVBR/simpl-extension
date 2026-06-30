@@ -26,9 +26,12 @@ import { NATIVE_ADDRESS, priceDebug, priceWarn } from "./price-identity";
 // back to the existing swap-proxy var, then the production gateway. Trailing
 // slashes are trimmed so path concatenation stays clean.
 function resolveApiBaseUrl(): string {
+  // `import.meta.env` is statically replaced by Vite; it is undefined under a
+  // plain Node/tsx runtime (the check scripts), so read it defensively.
+  const env = import.meta.env as Record<string, string | undefined> | undefined;
   const candidate =
-    (import.meta.env.VITE_SIMPL_API_URL as string | undefined) ??
-    (import.meta.env.VITE_SIMPL_SWAP_PROXY_URL as string | undefined) ??
+    env?.VITE_SIMPL_API_URL ??
+    env?.VITE_SIMPL_SWAP_PROXY_URL ??
     "https://api.getsimpl.io";
   const trimmed = (candidate ?? "").trim().replace(/\/+$/u, "");
   return trimmed || "https://api.getsimpl.io";
