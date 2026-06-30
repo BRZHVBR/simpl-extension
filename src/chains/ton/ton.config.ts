@@ -9,8 +9,8 @@
 // ever used for TON.
 //
 // PROVIDER PROXY: all TON network reads/writes go through the Simpl API Worker
-// (`api.getsimpl.io/v1/ton/*`), NEVER directly to tonapi.io / toncenter. The
-// provider API keys live ONLY in the Worker's server-side secrets and never
+// (`api.getsimpl.io/v1/ton/*`), never to any upstream data provider directly.
+// The upstream API keys live ONLY in the Worker's server-side secrets and never
 // reach this client bundle. Signing always stays local in the extension; the
 // proxy only ever receives a public address, a signed BOC, a tx hash and
 // period/currency params.
@@ -55,8 +55,8 @@ export const SIMPL_API_BASE_URL = envString(
   "https://api.getsimpl.io",
 ).replace(/\/$/, "");
 
-// All TON provider traffic is proxied under this base by the getsimpl-api
-// Worker. The Worker holds the tonapi/toncenter secrets; nothing sensitive is
+// All TON network traffic is proxied under this base by the getsimpl-api
+// Worker. The Worker holds the upstream provider secrets; nothing sensitive is
 // inlined here.
 export const TON_API_BASE_URL = `${SIMPL_API_BASE_URL}/v1/ton`;
 
