@@ -22,6 +22,7 @@ export default defineConfig({
       "@getsimpl/balances": corePkg("balances"),
       "@getsimpl/portfolio": corePkg("portfolio"),
       "@getsimpl/activity": corePkg("activity"),
+      "@getsimpl/errors": corePkg("errors"),
       "@getsimpl/shared-types": corePkg("shared-types"),
     },
   },
