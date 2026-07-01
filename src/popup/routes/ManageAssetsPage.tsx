@@ -7,6 +7,7 @@
 // modal/backdrop/sheet. Back returns to Home; hidden-asset and custom-token
 // logic stays in HomePage and is reached through the callbacks below.
 
+import { shortenAddress } from "@getsimpl/core";
 import { AssetIcon } from "../components/AssetIcon";
 import { NetworkIcon } from "../components/NetworkIcon";
 import { getNetworkDisplayName } from "../../core/networks/chain-registry";
@@ -21,9 +22,11 @@ type ManageAssetsPageProps = {
   onBack: () => void;
 };
 
+// Delegates to @getsimpl/core (shared source of truth). Options preserve the
+// previous local format: head 6, tail 4, "…" separator (identical output for
+// real addresses, which are far longer than the head+tail).
 function truncateAddress(address: string): string {
-  if (address.length <= 12) return address;
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+  return shortenAddress(address, { start: 6, end: 4, separator: "…" });
 }
 
 function ManageAssetsPage(props: ManageAssetsPageProps) {

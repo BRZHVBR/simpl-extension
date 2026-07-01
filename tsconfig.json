@@ -10,7 +10,12 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["chrome", "vite/client"]
+    "types": ["chrome", "vite/client"],
+    "paths": {
+      "@getsimpl/core": ["../getsimpl-core/packages/core/src/index.ts"],
+      "@getsimpl/chains": ["../getsimpl-core/packages/chains/src/index.ts"],
+      "@getsimpl/formatters": ["../getsimpl-core/packages/formatters/src/index.ts"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }

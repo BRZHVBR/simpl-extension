@@ -1,6 +1,7 @@
 // src/popup/routes/HomePage.tsx
 
 import { useEffect, useRef, useState } from "react";
+import { shortenAddress } from "@getsimpl/core";
 import { SimpleInstrumentIcon } from "../components/SimpleInstrumentIcon";
 import { AssetIcon } from "../components/AssetIcon";
 import { NetworkIcon } from "../components/NetworkIcon";
@@ -219,9 +220,11 @@ function canRemoveAsset(asset: WalletAssetBalance): boolean {
   return !isNativeAsset(asset) && asset.source === "custom";
 }
 
+// Delegates to @getsimpl/core (shared source of truth). Options preserve the
+// previous local behavior exactly: head 8, tail 6, "..." separator, and the
+// same "return as-is when short" guard (length <= 14).
 function truncateAddress(address: string): string {
-  if (address.length <= 14) return address;
-  return `${address.slice(0, 8)}...${address.slice(-6)}`;
+  return shortenAddress(address, { start: 8, end: 6, separator: "..." });
 }
 
 function getExplorerBaseUrl(chainId: number): string | null {
