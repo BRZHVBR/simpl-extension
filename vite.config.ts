@@ -17,6 +17,12 @@ export default defineConfig({
       "@getsimpl/core": corePkg("core"),
       "@getsimpl/chains": corePkg("chains"),
       "@getsimpl/formatters": corePkg("formatters"),
+      "@getsimpl/accounts": corePkg("accounts"),
+      "@getsimpl/assets": corePkg("assets"),
+      "@getsimpl/balances": corePkg("balances"),
+      "@getsimpl/portfolio": corePkg("portfolio"),
+      "@getsimpl/activity": corePkg("activity"),
+      "@getsimpl/shared-types": corePkg("shared-types"),
     },
   },
   build: {
