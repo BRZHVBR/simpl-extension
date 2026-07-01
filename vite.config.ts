@@ -26,6 +26,7 @@ export default defineConfig({
       "@getsimpl/swaps": corePkg("swaps"),
       "@getsimpl/bridges": corePkg("bridges"),
       "@getsimpl/adapters": corePkg("adapters"),
+      "@getsimpl/transactions": corePkg("transactions"),
       "@getsimpl/shared-types": corePkg("shared-types"),
     },
   },
