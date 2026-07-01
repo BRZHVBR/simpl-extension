@@ -1,6 +1,7 @@
 // src/popup/routes/SwapPage.tsx
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { shortenAddress } from "@getsimpl/core";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import { isWatchOnly } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
@@ -992,9 +993,10 @@ function customToSwapToken(token: CustomToken): SwapToken {
   };
 }
 
+// Delegates to @getsimpl/core (single source of truth). Display-only; head 6,
+// tail 4, "…" separator — identical output for real addresses.
 function truncatePickerAddress(address: string): string {
-  if (address.length <= 14) return address;
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+  return shortenAddress(address, { start: 6, end: 4, separator: "…" });
 }
 
 // Returns a known registered token whose hex address shares a common prefix with the input.
