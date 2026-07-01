@@ -11,6 +11,8 @@
 // mnemonic or password is ever sent. Base58 mints/addresses are passed verbatim
 // (case-sensitive — never lowercased).
 
+import { normalizeApiErrorBody } from "../api/api-error";
+
 // Resolve the Simpl API gateway base URL, mirroring simpl-market-api.service so
 // the whole extension shares one base URL convention. No direct Jupiter URL is
 // ever used here.
@@ -55,10 +57,19 @@ async function postJson<T>(
     }
 
     if (!response.ok) {
+      // Legacy `{ error: "text" }` bodies keep their string (so the existing
+      // text-based normalizeSwapError mappings still apply); the hardened
+      // `{ error: { code, … } }` envelope is folded into a safe user message via
+      // the shared parser (never "[object Object]").
+      const legacyError =
+        parsed && typeof parsed === "object" && "error" in parsed
+          ? (parsed as { error?: unknown }).error
+          : undefined;
       const message =
-        (parsed && typeof parsed === "object" && "error" in parsed
-          ? String((parsed as { error?: unknown }).error ?? "")
-          : "") || `${response.status} ${response.statusText}`;
+        typeof legacyError === "string" && legacyError
+          ? legacyError
+          : normalizeApiErrorBody(parsed ?? text, response.status).userMessage ||
+            `${response.status} ${response.statusText}`;
       throw new Error(message);
     }
 

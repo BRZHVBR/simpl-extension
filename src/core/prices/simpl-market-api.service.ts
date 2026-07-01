@@ -144,6 +144,12 @@ export type SimplOhlcResult = {
   updatedAt?: string;
 };
 
+// Chain family, as surfaced by Asset Resolver v2. Kept as a distinct union so
+// the client can branch by ecosystem WITHOUT re-deriving it from address shape
+// (which is what previously risked treating TRON as an EVM 0x token, or TON as
+// Solana). See `chainTypeForBackendChainId` for the local fallback.
+export type SimplChainType = "evm" | "solana" | "tron" | "bitcoin" | "ton";
+
 export type SimplAssetResolution = {
   assetId?: string;
   chainId: string;
@@ -153,6 +159,14 @@ export type SimplAssetResolution = {
   // The gateway's authoritative answer on whether this asset's balance may
   // count toward real portfolio value (mainnet → true, testnet → false).
   includeInTotalBalance?: boolean;
+  // ── Asset Resolver v2 (additive; older gateways may omit these) ──
+  chainType?: SimplChainType;
+  decimals?: number;
+  logoURI?: string | null;
+  coingeckoId?: string;
+  isNative?: boolean;
+  isStablecoin?: boolean;
+  verified?: boolean;
 };
 
 export type SimplAssetMetadata = {
@@ -163,7 +177,37 @@ export type SimplAssetMetadata = {
   name?: string;
   decimals?: number;
   logoUrl?: string | null;
+  // ── Asset Resolver v2 (additive) ──
+  chainType?: SimplChainType;
+  logoURI?: string | null;
+  coingeckoId?: string;
+  isNative?: boolean;
+  isStablecoin?: boolean;
+  verified?: boolean;
 };
+
+// Map a backend chainId slug / numeric string to its chain family. Used as a
+// LOCAL fallback to fill `chainType` when an older gateway response omits it, so
+// downstream code can rely on chainType being present and correct. A numeric id
+// is always EVM; the non-EVM chains use their known slugs.
+export function chainTypeForBackendChainId(backendChainId: string): SimplChainType {
+  const id = backendChainId.trim().toLowerCase();
+  if (id === "ton") return "ton";
+  if (id === "tron") return "tron";
+  if (id === "solana" || id === "solana-devnet") return "solana";
+  if (id === "bitcoin" || id === "bitcoin-testnet") return "bitcoin";
+  return "evm";
+}
+
+// Ensure `chainType` is present on a resolution/metadata object (additive, safe
+// for older responses that omit it). Never overrides a value the gateway sent.
+function withChainType<T extends { chainId: string; chainType?: SimplChainType }>(
+  value: T,
+): T {
+  return value.chainType
+    ? value
+    : { ...value, chainType: chainTypeForBackendChainId(value.chainId) };
+}
 
 export type SimplAssetRef = {
   chainId: number;
@@ -344,6 +388,12 @@ export async function resolveAsset(params: {
       symbol: "GRAM",
       name: "Gram",
       includeInTotalBalance: true,
+      chainType: "ton",
+      decimals: 9,
+      isNative: true,
+      isStablecoin: false,
+      verified: true,
+      logoURI: null,
     };
   }
 
@@ -352,9 +402,12 @@ export async function resolveAsset(params: {
     address: toBackendAddress(params.address),
   });
   try {
-    return await fetchJson<SimplAssetResolution>(
+    const resolved = await fetchJson<SimplAssetResolution>(
       `${API_BASE_URL}/v1/assets/resolve?${search.toString()}`,
     );
+    // Guarantee chainType is present + correct even on older gateway responses
+    // (keeps TRON off the EVM path and TON/GRAM off the Solana/EVM path).
+    return withChainType(resolved);
   } catch (error) {
     priceWarn("simpl resolve failed", {
       chainId: params.chainId,
@@ -380,6 +433,11 @@ export async function getAssetMetadata(params: {
       name: "Gram",
       decimals: 9,
       logoUrl: null,
+      chainType: "ton",
+      logoURI: null,
+      isNative: true,
+      isStablecoin: false,
+      verified: true,
     };
   }
 
@@ -388,9 +446,10 @@ export async function getAssetMetadata(params: {
     address: toBackendAddress(params.address),
   });
   try {
-    return await fetchJson<SimplAssetMetadata>(
+    const metadata = await fetchJson<SimplAssetMetadata>(
       `${API_BASE_URL}/v1/assets/metadata?${search.toString()}`,
     );
+    return withChainType(metadata);
   } catch (error) {
     priceWarn("simpl metadata failed", {
       chainId: params.chainId,

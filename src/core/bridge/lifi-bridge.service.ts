@@ -19,6 +19,7 @@
 // quote-preview only — this module never fabricates signing support.
 
 import { getChainById } from "../networks/chain-registry";
+import { normalizeApiErrorBody } from "../api/api-error";
 import {
   extractSerializedSolanaTransaction,
   isBridgeDebugEnabled,
@@ -1381,6 +1382,35 @@ function classifyQuoteError(
   err: BridgeHttpError,
   params: BridgeQuoteParams,
 ): NoBridgeRouteError | BridgeQuoteError {
+  // Prefer the gateway's normalized error contract when it gives a stable code.
+  // This surfaces clean, safe copy for the hardened codes (rate limit, provider
+  // timeout/unavailable, quote expiry, insufficient liquidity, unsupported
+  // asset) without changing control flow — a classified BridgeQuoteError still
+  // blocks the confirm button, which is exactly what we want for a rate limit
+  // (no aggressive auto-retry). BAD_REQUEST/validation fall through to the
+  // precise TRON/token/amount text matching below.
+  const normalized = normalizeApiErrorBody(err.bodyJson ?? err.bodyText, err.status);
+  switch (normalized.code) {
+    case "NO_ROUTE":
+    case "INSUFFICIENT_LIQUIDITY":
+      return new NoBridgeRouteError();
+    case "RATE_LIMITED":
+    case "UPSTREAM_TIMEOUT":
+    case "PROVIDER_TIMEOUT":
+    case "UPSTREAM_UNAVAILABLE":
+    case "QUOTE_EXPIRED":
+    case "PROVIDER_ERROR":
+      return new BridgeQuoteError("failed", normalized.userMessage, err.status);
+    case "UNSUPPORTED_ASSET":
+    case "UNSUPPORTED_TOKEN":
+    case "INVALID_TOKEN":
+      return new BridgeQuoteError("invalidToken", normalized.userMessage, err.status);
+    case "UNSUPPORTED_CHAIN":
+      return new BridgeQuoteError("failed", normalized.userMessage, err.status);
+    default:
+      break; // fall through to the legacy, more specific text matching
+  }
+
   const body = err.bodyJson ?? {};
   const msg = (
     (typeof body.message === "string" ? body.message : "") +
