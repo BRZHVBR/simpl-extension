@@ -955,6 +955,87 @@ async function handleDappRequest(
         return;
       }
 
+      // First-party network switch for SIMPL surfaces (e.g. the dashboard).
+      // Namespace-agnostic: works for EVM and non-EVM chains alike, and routes
+      // through the SAME approval popup as wallet_switchEthereumChain — so the
+      // dashboard never opens a standalone wallet window. A locked wallet is
+      // unlocked inside that approval popup before the switch is applied.
+      case "simpl_switchChain": {
+        const rawChainId = (message.params[0] as Record<string, unknown> | undefined)?.chainId;
+        // Accept a numeric chainId (or hex/decimal string) in params[0].chainId.
+        const requestedChainId =
+          typeof rawChainId === "number"
+            ? rawChainId
+            : typeof rawChainId === "string"
+              ? Number.parseInt(rawChainId, rawChainId.startsWith("0x") ? 16 : 10)
+              : Number.NaN;
+
+        const connected = await getDappConnectionForOrigin(origin);
+        const matchedChain = Number.isFinite(requestedChainId) ? getChainById(requestedChainId) : null;
+
+        if (import.meta.env.DEV) {
+          console.debug("[simpl:bg] simpl_switchChain", {
+            origin,
+            rawChainId,
+            rawChainIdType: typeof rawChainId,
+            requestedChainId,
+            matchedChain: matchedChain
+              ? { chainId: matchedChain.chainId, family: matchedChain.family, name: matchedChain.name }
+              : null,
+            selectedChainId: chainId,
+            connected,
+          });
+        }
+
+        // Connection guard — namespace-agnostic (same connectedSites check as
+        // every other dApp method; not EVM-specific).
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+
+        if (!Number.isFinite(requestedChainId)) {
+          sendResponse({ ok: false, error: { code: -32602, message: "Invalid chainId." } });
+          return;
+        }
+
+        if (!matchedChain) {
+          sendResponse({
+            ok: false,
+            error: {
+              code: 4902,
+              message: "Unrecognized chain.",
+              data: { chainId: requestedChainId },
+            },
+          });
+          return;
+        }
+
+        // Already active — succeed immediately, no approval popup.
+        if (requestedChainId === chainId) {
+          sendResponse({ ok: true, result: null });
+          return;
+        }
+
+        const simplSwitchApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(simplSwitchApprovalId, {
+          id: simplSwitchApprovalId,
+          origin,
+          kind: "switch_chain",
+          switchChainId: requestedChainId,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        if (import.meta.env.DEV) {
+          console.debug("[simpl:bg] simpl_switchChain → approval popup", {
+            approvalId: simplSwitchApprovalId,
+            switchChainId: requestedChainId,
+          });
+        }
+        await openDappApprovalWindow(simplSwitchApprovalId);
+        return;
+      }
+
       case "eth_sendTransaction": {
         const connected = await getDappConnectionForOrigin(origin);
         if (!connected) {
