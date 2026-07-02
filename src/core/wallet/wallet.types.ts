@@ -99,6 +99,44 @@ export type RevealPrivateKeyResult = {
   privateKey: EvmPrivateKey;
 };
 
+// A single exportable private key for an account. "shared" means one secp256k1
+// key backs both the EVM and TRON addresses (private-key imports). Values are
+// returned only after password verification and must never be persisted.
+export type ExportedKeyFamily = "evm" | "tron" | "shared";
+
+export type ExportedPrivateKey = {
+  family: ExportedKeyFamily;
+  label: string;
+  privateKey: string;
+  note?: string;
+};
+
+export type ExportAccountKeysInput = {
+  accountId?: WalletAccountId;
+  password: string;
+};
+
+export type ExportAccountKeysResult = {
+  account: WalletAccount;
+  keys: ExportedPrivateKey[];
+};
+
+// A public address row for an account, shown on the Accounts screen
+// independently of the selected network. Never carries private key material.
+export type AccountAddressFamily =
+  | "evm"
+  | "tron"
+  | "bitcoin"
+  | "solana"
+  | "ton";
+
+export type AccountDisplayAddress = {
+  family: AccountAddressFamily;
+  label: string;
+  address: string;
+  explorerUrl?: string;
+};
+
 export type GetSelectedBalanceResult = NativeBalance;
 
 export type GetSelectedPortfolioResult = {
@@ -111,6 +149,9 @@ export type SendSelectedAssetInput = {
   toAddress: string;
   amount: string;
   password?: string;
+  // Bitcoin only: the chosen fee rate (sat/vB) from the send form's preset. The
+  // service falls back to a "normal" quote when omitted. Ignored by EVM/TRON.
+  feeRateSatPerVb?: number;
 };
 
 export type SendSelectedAssetResult = {

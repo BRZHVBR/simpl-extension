@@ -1,30 +1,23 @@
 /* src/popup/routes/AccountPage.css */
 
 /* ============================================================
-   PIXEL AVATAR
+   ACCOUNT BLOCKIE (ethereum-blockies avatar)
    ============================================================ */
 
-.pixel-avatar {
-  border-radius: 12px;
-  overflow: hidden;
+/* Deterministic account avatar from the address. The blockie itself is the
+   visual identity — no background circle or decorative ring (active/imported/
+   watch status is shown via pills/badges instead). border-radius is applied
+   inline per size by the component. */
+.account-blockie {
+  display: block;
   flex-shrink: 0;
+  object-fit: cover;
+  background: transparent;
 }
 
-.pixel-avatar-grid {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  grid-template-rows: repeat(5, 1fr);
-  box-sizing: border-box;
-}
-
-.pixel-avatar-cell {
-  border-radius: 1px;
-}
-
-.pixel-avatar--watch {
-  opacity: 0.72;
+.account-blockie--placeholder {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
 }
 
 /* ============================================================
@@ -69,16 +62,46 @@
    ACCOUNT ROW CARD
    ============================================================ */
 
+/* Card is a column: a clickable header (opens AccountDetailsPage) plus public
+   address rows below it. */
 .acct-row-card {
-  border: 1px solid var(--line, #e5e5e5);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--bg-surface, #ffffff);
+  background: var(--bg-surface);
   overflow: hidden;
   transition: border-color 100ms ease, background 100ms ease;
 }
 
-.acct-row-card:hover {
-  border-color: var(--line-strong, #d4d4d4);
+/* The header row — avatar | name/source | Active + chevron. */
+.acct-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Hover/tap affordance scoped to the header so the address controls below
+   don't tint the card (inactive rows tint; active rows stay green). */
+.acct-row-card:not(.acct-row-card--active):hover {
+  border-color: var(--line-strong);
+}
+
+.acct-row-card:not(.acct-row-card--active) .acct-row-main:hover {
+  background: rgba(var(--ink-rgb), 0.03);
+}
+
+.acct-row-card:not(.acct-row-card--active) .acct-row-main:active {
+  background: rgba(var(--ink-rgb), 0.06);
 }
 
 .acct-row-card--active {
@@ -86,16 +109,120 @@
   background: rgba(42, 111, 78, 0.04) !important;
 }
 
-/* Button inside card — fill the card, strip default button styles */
-.acct-row-card > button.row {
-  padding: 10px 12px !important;
-  cursor: pointer !important;
-  background: transparent !important;
+/* ── Multi-chain address rows (under the account name) ── */
+.acct-addr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* Align under the name text: card padding 12 + avatar 38 + gap 10 = 60. */
+  padding: 0 12px 10px 60px;
 }
 
-/* Keep active card green even on hover */
-.acct-row-card--active > button.row:hover {
-  background: transparent !important;
+.acct-addr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.acct-addr-badge {
+  flex-shrink: 0;
+  width: 42px;
+  padding: 1px 0;
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.7;
+  text-align: center;
+}
+
+/* TRON badge gets a subtle brand-tinted treatment. */
+.acct-addr-badge--tron {
+  background: rgba(235, 0, 41, 0.08);
+  border-color: rgba(235, 0, 41, 0.22);
+  color: var(--danger);
+}
+
+/* Bitcoin (BTC + tBTC) badge: subtle orange brand tint. */
+.acct-addr-badge--bitcoin {
+  background: rgba(247, 147, 26, 0.1);
+  border-color: rgba(247, 147, 26, 0.28);
+  color: var(--warn);
+}
+
+.acct-addr-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.acct-addr-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.acct-addr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: color 100ms ease, background 100ms ease;
+}
+
+.acct-addr-btn:hover {
+  color: var(--ink-1);
+  background: rgba(var(--ink-rgb), 0.05);
+}
+
+.acct-addr-copied {
+  color: var(--secure) !important;
+}
+
+/* Row internals (no design-kit .row class on the button anymore) */
+.acct-row-card .body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.acct-row-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Trailing status + chevron affordance (visual only — whole row is clickable) */
+.acct-row-aside {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.acct-row-chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-4);
 }
 
 /* ============================================================
@@ -120,13 +247,71 @@
   color: var(--ink-1);
 }
 
+/* ============================================================
+   ACTIVE ACCOUNT SUMMARY CARD (top of page)
+   ============================================================ */
+
+.acct-active-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(42, 111, 78, 0.3);
+  border-radius: 18px;
+  background: rgba(42, 111, 78, 0.05);
+}
+
+.acct-active-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.acct-active-card__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.acct-active-card__name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-1);
+}
+
+.acct-active-card__sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Imported pill — neutral (distinct from the warm watch-only pill) */
+.acct-imported-pill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--ink-2);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.7;
+  border: 1px solid var(--line);
+}
+
 /* Watch-only pill */
 .acct-watch-pill {
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: 999px;
-  background: var(--warn-soft, #f4eedf);
-  color: var(--warn, #9a6b1e);
+  background: var(--warn-soft);
+  color: var(--warn);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -140,8 +325,8 @@
   justify-content: center;
   padding: 3px 9px;
   border-radius: 999px;
-  background: var(--secure, #2a6f4e);
-  color: #ffffff;
+  background: var(--secure);
+  color: var(--bg-surface);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -174,21 +359,90 @@
    ============================================================ */
 
 .acct-action-card {
-  border: 1px solid var(--line, #e5e5e5);
+  border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--bg-surface, #ffffff);
+  background: var(--bg-surface);
   overflow: hidden;
   transition: border-color 100ms ease, background 100ms ease;
 }
 
 .acct-action-card:hover {
-  border-color: var(--line-strong, #d4d4d4);
+  border-color: var(--line-strong);
 }
 
 .acct-action-card > button.row {
   padding: 10px 12px !important;
   cursor: pointer !important;
   background: transparent !important;
+}
+
+/* ============================================================
+   ADD ACCOUNT — compact discovery card (opens the add sheet)
+   ============================================================ */
+
+/* Calm, secondary affordance — quieter than account cards (dashed, no fill)
+   so the account list stays the focus. The whole card is the button. */
+.acct-add-discover {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 16px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.acct-add-discover:hover {
+  border-color: var(--ink-4);
+  background: rgba(var(--ink-rgb), 0.02);
+}
+
+.acct-add-discover:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.acct-add-discover__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.acct-add-discover__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-1);
+}
+
+.acct-add-discover__sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-add-discover__cta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.acct-add-discover:hover .acct-add-discover__cta {
+  border-color: var(--ink-4);
 }
 
 /* ============================================================
@@ -200,7 +454,7 @@
   border-radius: 12px;
   border: 1px solid rgba(190, 48, 48, 0.2);
   background: rgba(190, 48, 48, 0.07);
-  color: var(--danger, #be3030);
+  color: var(--danger);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -219,4 +473,537 @@
 html[data-simple-surface="fullscreen"] .acct-row-card,
 html[data-simple-surface="fullscreen"] .acct-action-card {
   border-radius: 20px;
+}
+
+/* ============================================================
+   ACCOUNT DETAILS PAGE (info + imported removal)
+   ============================================================ */
+
+.acct-details-page {
+  display: flex !important;
+  flex-direction: column !important;
+  /* Fill the popup/fullscreen frame so the header pins to the top and only the
+     body scrolls. height:100% keeps the column bounded even if a parent's fixed
+     height is ever relaxed, so the scroll container always has a real height. */
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background: var(--bg-canvas) !important;
+}
+
+/* Header is a fixed, opaque row above the scroll body — it must never shrink or
+   let scrolled content show through/under it. */
+.acct-details-page .bar-top {
+  flex: 0 0 auto !important;
+  z-index: 2 !important;
+  background: var(--bg-surface) !important;
+}
+
+.acct-details-title {
+  flex: 1;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-1);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-details-page .acct-details-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  /* Comfortable top spacing below the fixed header, and generous bottom padding
+     so the last action (Remove / Reset) is never clipped at the popup edge. */
+  padding: 18px 18px max(28px, env(safe-area-inset-bottom, 0px)) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  scroll-behavior: smooth !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+/* Direct sections keep their natural height — without this, a flex column
+   squashes the activation button and clips the info card (overflow:hidden)
+   when content exceeds the popup height. The body scrolls instead. */
+.acct-details-page .acct-details-body > * {
+  flex-shrink: 0;
+}
+
+/* Stable height for the activation primary button (Use account). `.btn.lg`
+   only sets `height`, which a flex column can still shrink. */
+.acct-details-page .acct-details-body > .btn,
+.acct-details-primary-btn {
+  min-height: 48px !important;
+  height: 48px !important;
+}
+
+/* Hero — centered avatar + name + source */
+.acct-details-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 4px 0 0;
+}
+
+.acct-details-hero__name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--ink-1);
+}
+
+.acct-details-hero__name-text {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inline rename pencil next to the account name */
+.acct-rename-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-surface);
+  color: var(--ink-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 100ms ease, color 100ms ease;
+}
+
+.acct-rename-btn:hover {
+  border-color: var(--line-strong);
+  color: var(--ink-1);
+}
+
+/* Source + badge line under the name */
+.acct-details-hero__meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.acct-details-hero__source {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+/* ── Inline rename editor ── */
+.acct-rename {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  max-width: 280px;
+}
+
+.acct-rename-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.acct-rename-input:focus {
+  outline: none;
+  border-color: var(--ink-1);
+}
+
+.acct-rename-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.acct-rename-actions .btn {
+  flex: 1;
+}
+
+.acct-rename-error {
+  font-size: 12px;
+  color: var(--danger);
+  text-align: center;
+}
+
+/* ── Quick actions (Receive / Send / Swap) ── */
+.acct-quick-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.acct-quick-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 64px;
+  height: 64px;
+  padding: 10px 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.acct-quick-btn:hover {
+  border-color: var(--line-strong);
+  background: rgba(var(--ink-rgb), 0.03);
+}
+
+.acct-quick-btn:active {
+  background: rgba(var(--ink-rgb), 0.06);
+}
+
+.acct-quick-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-1);
+}
+
+/* ── Full address card ── */
+.acct-details-address-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-surface);
+  padding: 14px;
+}
+
+.acct-details-address-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.acct-details-address-value {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-1);
+  word-break: break-all;
+}
+
+/* Info card */
+.acct-details-info-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.acct-details-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 14px;
+}
+
+.acct-details-info-row + .acct-details-info-row {
+  border-top: 1px solid var(--line);
+}
+
+.acct-details-info-label {
+  font-size: 13px;
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+.acct-details-info-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-1);
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-details-info-mono {
+  font-family: var(--font-mono, monospace);
+}
+
+/* Active status card (shown instead of the Use account button) */
+.acct-details-active-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 52px;
+  border-radius: 13px;
+  border: 1px solid rgba(42, 111, 78, 0.3);
+  background: rgba(42, 111, 78, 0.06);
+  color: var(--secure);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.acct-details-active-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--secure);
+}
+
+.acct-details-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acct-details-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  height: 44px;
+  text-decoration: none;
+}
+
+.acct-details-copied {
+  border-color: var(--secure) !important;
+  color: var(--secure) !important;
+}
+
+/* ── Export private key (reveal screen) ── */
+.acct-export-key__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.acct-export-key__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-export-key__copy {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.acct-export-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 7px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+}
+
+.acct-export-badge--evm {
+  background: rgba(98, 126, 234, 0.1);
+  border-color: rgba(98, 126, 234, 0.25);
+  color: #3b53b5;
+}
+
+.acct-export-badge--tron {
+  background: rgba(235, 0, 41, 0.08);
+  border-color: rgba(235, 0, 41, 0.22);
+  color: var(--danger);
+}
+
+.acct-export-badge--shared {
+  background: var(--bg-sunken);
+  border-color: var(--line);
+  color: var(--ink-2);
+}
+
+.acct-export-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warn);
+}
+
+/* Imported removal block */
+.acct-details-remove {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acct-details-help {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+/* Red OUTLINE button (details view) */
+.acct-danger-outline-btn {
+  width: 100%;
+  height: 52px;
+  border-radius: 13px;
+  border: 1px solid rgba(190, 48, 48, 0.4);
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.acct-danger-outline-btn:hover {
+  background: rgba(190, 48, 48, 0.06);
+}
+
+/* Quiet destructive button (details view) — used for "Remove from simpl" and
+   the primary "Reset wallet data" pointer. Intentionally softer than the
+   red-outlined "Export private key" so removal reads as less alarming: tinted
+   fill, no hard border, lighter weight. */
+.acct-remove-subtle-btn {
+  width: 100%;
+  height: 48px;
+  border-radius: 13px;
+  border: 1px solid transparent;
+  background: rgba(190, 48, 48, 0.06);
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 650;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.acct-remove-subtle-btn:hover {
+  background: rgba(190, 48, 48, 0.1);
+}
+
+/* Solid destructive button (confirm step) */
+.acct-danger-btn {
+  flex: 1;
+  height: 52px;
+  border-radius: 13px;
+  border: 0;
+  background: var(--danger);
+  color: var(--bg-surface);
+  font-size: 15px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 100ms ease;
+}
+
+.acct-danger-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Confirm step */
+.acct-details-danger-card {
+  border-radius: 14px;
+  border: 1px solid rgba(190, 48, 48, 0.25);
+  background: rgba(190, 48, 48, 0.06);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.acct-details-field {
+  display: grid;
+  gap: 6px;
+}
+
+.acct-details-field-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.acct-details-confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.acct-details-confirm-actions .btn {
+  flex: 1;
+}
+
+/* Success step */
+.acct-details-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 36px 12px 12px;
+}
+
+.acct-details-success__check {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: var(--secure);
+  color: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.acct-details-success__title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--ink-1);
+}
+
+.acct-details-success__sub {
+  font-size: 13px;
+  color: var(--ink-3);
+  line-height: 1.4;
 }

@@ -9,6 +9,14 @@ type NetworkIconProps = {
   showTestnetBadge?: boolean;
 };
 
+import {
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+  SOLANA_DEVNET_CHAIN_ID,
+  TON_MAINNET_CHAIN_ID,
+} from "../../core/networks/chain-registry";
+
 const CHAIN_ID_TO_NAME: Record<number, string> = {
   1: "ethereum",
   56: "bnb",
@@ -18,6 +26,12 @@ const CHAIN_ID_TO_NAME: Record<number, string> = {
   42161: "arbitrum",
   10: "optimism",
   43114: "avalanche",
+  728126428: "tron",
+  [BITCOIN_MAINNET_CHAIN_ID]: "bitcoin",
+  [BITCOIN_TESTNET_CHAIN_ID]: "bitcoin-testnet",
+  [SOLANA_MAINNET_CHAIN_ID]: "solana",
+  [SOLANA_DEVNET_CHAIN_ID]: "solana-devnet",
+  [TON_MAINNET_CHAIN_ID]: "ton",
 };
 
 // Sepolia reuses the Ethereum icon; the badge distinguishes it visually.
@@ -25,11 +39,19 @@ const ICON_FILE: Record<string, string> = {
   ethereum: "/network-icons/ethereum.svg",
   bnb: "/network-icons/bnb.svg",
   base: "/network-icons/base.svg",
-  sepolia: "/network-icons/ethereum.svg",
+  sepolia: "/network-icons/sepolia.svg",
   polygon: "/network-icons/polygon.svg",
   arbitrum: "/network-icons/arbitrum.svg",
   optimism: "/network-icons/optimism.svg",
   avalanche: "/network-icons/avalanche.svg",
+  tron: "/network-icons/tron.svg",
+  bitcoin: "/network-icons/bitcoin.svg",
+  // Testnet reuses the Bitcoin art; the testnet badge distinguishes it.
+  "bitcoin-testnet": "/network-icons/bitcoin.svg",
+  solana: "/network-icons/solana.svg",
+  // Devnet reuses the Solana art; the testnet badge distinguishes it.
+  "solana-devnet": "/network-icons/solana.svg",
+  ton: "/network-icons/ton.svg",
 };
 
 const FALLBACK_COLORS: Record<string, string> = {
@@ -41,9 +63,15 @@ const FALLBACK_COLORS: Record<string, string> = {
   arbitrum: "#213147",
   optimism: "#FF0420",
   avalanche: "#E84142",
+  tron: "#EB0029",
+  bitcoin: "#F7931A",
+  "bitcoin-testnet": "#F7931A",
+  solana: "#9945FF",
+  "solana-devnet": "#9945FF",
+  ton: "#0098EA",
 };
 
-const TESTNET_NAMES = new Set(["sepolia"]);
+const TESTNET_NAMES = new Set(["sepolia", "bitcoin-testnet", "solana-devnet"]);
 
 function resolveNetworkName(
   chainId?: number | string | null,
@@ -61,6 +89,9 @@ function resolveNetworkName(
   if (!raw) return null;
 
   if (raw.includes("sepolia")) return "sepolia";
+  // Bitcoin testnet must be checked before mainnet (it also contains "bitcoin").
+  if (raw.includes("bitcoin testnet") || raw === "tbtc") return "bitcoin-testnet";
+  if (raw.includes("bitcoin") || raw === "btc") return "bitcoin";
   if (raw.includes("ethereum") || raw === "eth" || raw.includes("mainnet")) return "ethereum";
   if (raw === "bnb" || raw === "bsc" || raw.includes("smart chain")) return "bnb";
   if (raw === "base") return "base";
@@ -68,8 +99,24 @@ function resolveNetworkName(
   if (raw.includes("arbitrum") || raw === "arb") return "arbitrum";
   if (raw.includes("optimism") || raw === "op") return "optimism";
   if (raw.includes("avalanche") || raw === "avax") return "avalanche";
+  if (raw.includes("tron") || raw === "trx") return "tron";
+  // Solana devnet must be checked before mainnet (it also contains "solana").
+  if (raw.includes("solana devnet") || raw === "sol devnet") return "solana-devnet";
+  if (raw.includes("solana") || raw === "sol") return "solana";
+  if (raw === "ton" || raw === "toncoin" || raw.includes("the open network")) return "ton";
 
   return null;
+}
+
+// Public network icon URL for a chain (e.g. "/network-icons/tron.svg"), or null
+// when no icon is mapped. Lets other components (e.g. AssetIcon) reuse the same
+// network art without duplicating the chain→file mapping.
+export function getNetworkIconUrl(
+  chainId?: number | string | null,
+  networkName?: string | null,
+): string | null {
+  const name = resolveNetworkName(chainId, networkName ?? null, null);
+  return name ? (ICON_FILE[name] ?? null) : null;
 }
 
 export function NetworkIcon({

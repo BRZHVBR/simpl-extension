@@ -10,7 +10,23 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["chrome", "vite/client"]
+    "types": ["chrome", "vite/client"],
+    "paths": {
+      "@getsimpl/core": ["../getsimpl-core/packages/core/src/index.ts"],
+      "@getsimpl/chains": ["../getsimpl-core/packages/chains/src/index.ts"],
+      "@getsimpl/formatters": ["../getsimpl-core/packages/formatters/src/index.ts"],
+      "@getsimpl/accounts": ["../getsimpl-core/packages/accounts/src/index.ts"],
+      "@getsimpl/assets": ["../getsimpl-core/packages/assets/src/index.ts"],
+      "@getsimpl/balances": ["../getsimpl-core/packages/balances/src/index.ts"],
+      "@getsimpl/portfolio": ["../getsimpl-core/packages/portfolio/src/index.ts"],
+      "@getsimpl/activity": ["../getsimpl-core/packages/activity/src/index.ts"],
+      "@getsimpl/errors": ["../getsimpl-core/packages/errors/src/index.ts"],
+      "@getsimpl/swaps": ["../getsimpl-core/packages/swaps/src/index.ts"],
+      "@getsimpl/bridges": ["../getsimpl-core/packages/bridges/src/index.ts"],
+      "@getsimpl/adapters": ["../getsimpl-core/packages/adapters/src/index.ts"],
+      "@getsimpl/transactions": ["../getsimpl-core/packages/transactions/src/index.ts"],
+      "@getsimpl/shared-types": ["../getsimpl-core/packages/shared-types/src/index.ts"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }

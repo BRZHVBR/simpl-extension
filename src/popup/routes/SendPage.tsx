@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { isAddress, keccak256 } from "ethers";
+import { useTranslation } from "../../i18n";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
 import type { WalletAssetBalance } from "../../core/tokens/token-balance.service";
@@ -11,6 +12,42 @@ import {
   type NativeAssetQuote,
 } from "../../core/prices/native-price.service";
 import { transactionHistoryService } from "../../core/transactions/transaction-history.service";
+import {
+  getNetworkDisplayName,
+  isTronChainId,
+  isBitcoinChainId,
+  isSolanaChainId,
+  isTonChainId,
+  TRON_MAINNET_CHAIN_ID,
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+  SOLANA_DEVNET_CHAIN_ID,
+  TON_MAINNET_CHAIN_ID,
+} from "../../core/networks/chain-registry";
+import { isValidTronAddress } from "../../chains/tron/tron.address";
+import { isValidBitcoinAddress } from "../../chains/bitcoin/bitcoin.address";
+import { isValidSolanaAddress } from "../../chains/solana/solana.address";
+import { isValidTonAddress } from "../../chains/ton/ton.address";
+import {
+  getTonTransactionExplorerUrl,
+  getTonConfigByChainId,
+} from "../../chains/ton/ton.config";
+import {
+  getBitcoinConfigByChainId,
+  getBitcoinTransactionExplorerUrl,
+} from "../../chains/bitcoin/bitcoin.config";
+import { getBitcoinFeeQuotes } from "../../chains/bitcoin/bitcoin.fees";
+import { estimateFeeSats } from "../../chains/bitcoin/bitcoin.transactions";
+import { satsToBtc, btcToSats } from "../../chains/bitcoin/bitcoin.format";
+import type {
+  BitcoinFeePreset,
+  BitcoinFeeQuotes,
+} from "../../chains/bitcoin/bitcoin.types";
+import { AssetIcon } from "../components/AssetIcon";
+import { NetworkIcon } from "../components/NetworkIcon";
+import { SelectNetworkPage } from "../components/SelectNetworkPage";
+import { SelectSendAssetPage } from "./SelectSendAssetPage";
 
 type SendPageProps = {
   asset: WalletAssetBalance;
@@ -18,6 +55,9 @@ type SendPageProps = {
   walletState: WalletState;
   onBack: () => void;
   onSent: () => void | Promise<void>;
+  // Re-sync global view state after switching network so the rest of the app
+  // (e.g. the Home network pill) stays consistent. Does not navigate away.
+  onChanged?: () => void | Promise<void>;
 };
 
 type SendStep = "form" | "review" | "success";
@@ -27,83 +67,73 @@ type SentTransaction = {
   explorerUrl: string | null;
 };
 
+// Conservative gas reserves by chainId (in native token units)
+const GAS_RESERVES: Record<number, number> = {
+  1: 0.001,
+  56: 0.001,
+  8453: 0.0005,
+  11155111: 0.01,
+  // TRX kept back for bandwidth/energy on a native TRX max-send.
+  [TRON_MAINNET_CHAIN_ID]: 1,
+  // ~0.0002 BTC kept back to cover the network fee on a native BTC max-send.
+  [BITCOIN_MAINNET_CHAIN_ID]: 0.0002,
+  [BITCOIN_TESTNET_CHAIN_ID]: 0.0002,
+  // ~0.001 SOL kept back for the network fee on a native SOL max-send.
+  [SOLANA_MAINNET_CHAIN_ID]: 0.001,
+  [SOLANA_DEVNET_CHAIN_ID]: 0.001,
+  // ~0.05 TON conservative reserve for the network fee (+ first-deploy cost) on
+  // a native TON max-send. Matches TON_FEE_RESERVE_NANO in ton.transactions.ts.
+  [TON_MAINNET_CHAIN_ID]: 0.05,
+};
+
+// Validate a recipient for the active chain's address family.
+function isValidRecipientForChain(chainId: number, address: string): boolean {
+  const trimmed = address.trim();
+
+  if (isTronChainId(chainId)) {
+    return isValidTronAddress(trimmed);
+  }
+
+  if (isBitcoinChainId(chainId)) {
+    const config = getBitcoinConfigByChainId(chainId);
+    return config ? isValidBitcoinAddress(trimmed, config) : false;
+  }
+
+  if (isSolanaChainId(chainId)) {
+    return isValidSolanaAddress(trimmed);
+  }
+
+  if (isTonChainId(chainId)) {
+    return isValidTonAddress(trimmed);
+  }
+
+  return isAddress(trimmed);
+}
+
 function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-function getNetworkLabel(chainId: number): string {
-  if (chainId === 1) return "Ethereum";
-  if (chainId === 56) return "BNB Chain";
-  if (chainId === 8453) return "Base";
-  if (chainId === 11155111) return "Sepolia";
-
-  return `Chain ${chainId}`;
-}
-
-type SendChainOption = {
-  chainId: number;
-  name: string;
-  nativeSymbol: string;
-  subtitle: string;
-};
-
-const SEND_CHAIN_OPTIONS: SendChainOption[] = [
-  {
-    chainId: 1,
-    name: "Ethereum Mainnet",
-    nativeSymbol: "ETH",
-    subtitle: "ETH · Chain 1",
-  },
-  {
-    chainId: 56,
-    name: "BNB Smart Chain",
-    nativeSymbol: "BNB",
-    subtitle: "BNB · Chain 56",
-  },
-  {
-    chainId: 8453,
-    name: "Base",
-    nativeSymbol: "ETH",
-    subtitle: "ETH · Chain 8453",
-  },
-  {
-    chainId: 11155111,
-    name: "Sepolia",
-    nativeSymbol: "ETH",
-    subtitle: "ETH · Chain 11155111",
-  },
-];
-
-function getActiveSendChain(chainId: number): SendChainOption {
-  return (
-    SEND_CHAIN_OPTIONS.find((chain) => chain.chainId === chainId) ?? {
-      chainId,
-      name: `Chain ${chainId}`,
-      nativeSymbol: "EVM",
-      subtitle: `Chain ${chainId}`,
-    }
-  );
-}
-
-function CrosshairIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" />
-      <path
-        d="M12 3v5M12 16v5M3 12h5M16 12h5"
-        fill="none"
-        stroke="currentColor"
-      />
-    </svg>
-  );
-}
-
+// Canonical network name from the chain registry (single source of truth).
+const getNetworkLabel = getNetworkDisplayName;
 
 function getExplorerTransactionUrl(chainId: number, hash: string): string | null {
   if (chainId === 1) return `https://etherscan.io/tx/${hash}`;
   if (chainId === 56) return `https://bscscan.com/tx/${hash}`;
   if (chainId === 8453) return `https://basescan.org/tx/${hash}`;
   if (chainId === 11155111) return `https://sepolia.etherscan.io/tx/${hash}`;
+  if (chainId === TRON_MAINNET_CHAIN_ID)
+    return `https://tronscan.org/#/transaction/${hash}`;
+
+  const bitcoinConfig = getBitcoinConfigByChainId(chainId);
+  if (bitcoinConfig) {
+    return getBitcoinTransactionExplorerUrl(bitcoinConfig, hash);
+  }
+
+  const tonConfig = getTonConfigByChainId(chainId);
+  if (tonConfig) {
+    return getTonTransactionExplorerUrl(tonConfig, hash);
+  }
 
   return null;
 }
@@ -543,7 +573,9 @@ export function SendPage({
   walletState,
   onBack,
   onSent,
+  onChanged,
 }: SendPageProps) {
+  const { t } = useTranslation();
   const [selectedAsset, setSelectedAsset] = useState<WalletAssetBalance>(asset);
   const [availableAssets, setAvailableAssets] = useState<WalletAssetBalance[]>([
     asset,
@@ -563,9 +595,31 @@ export function SendPage({
   const [assetSelectorOpen, setAssetSelectorOpen] = useState(false);
   const [networkSelectorOpen, setNetworkSelectorOpen] = useState(false);
   const [currentChainId, setCurrentChainId] = useState(walletState.selectedChainId);
+  // The account's TRON address, resolved lazily so it can be recorded as the
+  // `from` address in local history for TRON sends.
+  const [tronFromAddress, setTronFromAddress] = useState<string | null>(null);
+  // The account's BTC receive address (the `from` shown in the UI / history).
+  const [bitcoinFromAddress, setBitcoinFromAddress] = useState<string | null>(
+    null,
+  );
+  // The account's Solana base58 address (the `from` shown in the UI / history).
+  const [solanaFromAddress, setSolanaFromAddress] = useState<string | null>(
+    null,
+  );
+  // The account's TON address (UQ…) (the `from` shown in the UI / history).
+  const [tonFromAddress, setTonFromAddress] = useState<string | null>(null);
+  // Bitcoin fee presets (sat/vB) + the user's chosen preset.
+  const [bitcoinFeeQuotes, setBitcoinFeeQuotes] =
+    useState<BitcoinFeeQuotes | null>(null);
+  const [bitcoinFeePreset, setBitcoinFeePreset] =
+    useState<BitcoinFeePreset>("normal");
   const [error, setError] = useState<string | null>(null);
   const [sentTransaction, setSentTransaction] =
     useState<SentTransaction | null>(null);
+
+  // Validation touch state
+  const [toAddressTouched, setToAddressTouched] = useState(false);
+  const [amountTouched, setAmountTouched] = useState(false);
 
   const assetUsdPrice = getAssetUsdPrice(selectedAsset, nativeQuote);
   const transferAmount = convertAmountToAsset({
@@ -574,13 +628,180 @@ export function SendPage({
     usdPrice: assetUsdPrice,
   });
   const normalizedAmount = normalizeAmount(transferAmount);
-  const recipientIsValid = isAddress(toAddress.trim());
+  const isTron = isTronChainId(currentChainId);
+  const isBitcoin = isBitcoinChainId(currentChainId);
+  const isSolana = isSolanaChainId(currentChainId);
+  const isTon = isTonChainId(currentChainId);
+  const recipientIsValid = isValidRecipientForChain(currentChainId, toAddress);
   const amountIsValid = isPositiveAmount(normalizedAmount);
   const amountCanBeConverted = amountMode === "asset" || assetUsdPrice !== null;
   const isWatchOnly = selectedAccount.type === "watch";
+
+  // The display/history "from" address for the active chain. Non-EVM families
+  // resolve a derived address through the service; EVM uses the stored address.
+  const fromAddress = isTron
+    ? tronFromAddress ?? selectedAccount.address
+    : isBitcoin
+      ? bitcoinFromAddress ?? selectedAccount.address
+      : isSolana
+        ? solanaFromAddress ?? selectedAccount.address
+        : isTon
+          ? tonFromAddress ?? selectedAccount.address
+          : selectedAccount.address;
+
+  const assetBalance = Number(selectedAsset.formatted);
+  const toAddressError =
+    toAddressTouched && toAddress.length > 0 && !recipientIsValid
+      ? isTron
+        ? t("send.invalidTronAddress")
+        : isBitcoin
+          ? t("send.invalidBitcoinAddress")
+          : isSolana
+            ? t("send.invalidSolanaAddress")
+            : isTon
+              ? t("send.invalidRecipient")
+              : t("send.invalidEvmAddress")
+      : null;
+
+  // The chosen Bitcoin fee rate (sat/vB) and a representative network-fee
+  // estimate (1 input + 2 outputs). The exact fee is recomputed from real UTXOs
+  // at broadcast time; this is the pre-flight estimate the user reviews.
+  const bitcoinFeeRate = isBitcoin
+    ? bitcoinFeeQuotes?.[bitcoinFeePreset].satPerVb ?? null
+    : null;
+  const bitcoinEstimatedFeeSats =
+    isBitcoin && bitcoinFeeRate != null
+      ? estimateFeeSats(1, 2, bitcoinFeeRate)
+      : null;
+  const bitcoinEstimatedFeeBtc =
+    bitcoinEstimatedFeeSats != null ? satsToBtc(bitcoinEstimatedFeeSats) : null;
+  // amount + estimated fee, in BTC, for the review screen. Guarded so a bad
+  // amount never throws during render.
+  const bitcoinTotalBtc = (() => {
+    if (!isBitcoin || bitcoinEstimatedFeeSats == null || !amountIsValid) {
+      return null;
+    }
+    try {
+      return satsToBtc(btcToSats(normalizedAmount) + bitcoinEstimatedFeeSats);
+    } catch {
+      return null;
+    }
+  })();
+  // TON has no cheap exact pre-flight fee; we surface the conservative reserve as
+  // an upper-bound ("≤") estimate. Native TON only (Jetton send is out of scope).
+  const tonIsNativeSend = isTon && selectedAsset.type === "native";
+  const tonFeeReserve = GAS_RESERVES[TON_MAINNET_CHAIN_ID] ?? 0.05;
+  const tonEstimatedFeeText = tonIsNativeSend
+    ? `≤ ${trimDecimal(tonFeeReserve.toFixed(9))} TON`
+    : null;
+  const tonTotalText =
+    tonIsNativeSend && amountIsValid
+      ? `≤ ${trimDecimal((Number(normalizedAmount) + tonFeeReserve).toFixed(9))} TON`
+      : null;
+
+  const hasInsufficientBalance =
+    amountIsValid && Number(normalizedAmount) > assetBalance;
+  const amountError =
+    amountTouched && hasInsufficientBalance
+      ? t("send.insufficientSymbolBalance", { symbol: selectedAsset.symbol })
+      : null;
+
+  const fiatEstimate: string | null = (() => {
+    if (!assetUsdPrice || !amount) return null;
+    const raw = normalizeAmount(amount);
+    if (amountMode === "asset") {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      const usd = n * assetUsdPrice;
+      return `≈ $${usd < 0.01 ? usd.toFixed(6) : usd.toFixed(2)}`;
+    }
+    const equiv = convertUsdAmountToAsset({ amount: raw, usdPrice: assetUsdPrice });
+    const n = Number(equiv);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return `≈ ${trimDecimal(n.toFixed(8))} ${selectedAsset.symbol}`;
+  })();
+
   const canContinue =
-    recipientIsValid && amountIsValid && amountCanBeConverted && !sending;
+    recipientIsValid &&
+    amountIsValid &&
+    amountCanBeConverted &&
+    !sending &&
+    !hasInsufficientBalance;
+
   const networkLabel = getNetworkLabel(currentChainId);
+  const assetStandardLabel =
+    selectedAsset.type === "native"
+      ? "Native"
+      : selectedAsset.type === "trc20"
+        ? "TRC-20"
+        : selectedAsset.type === "spl"
+          ? "SPL"
+          : "ERC-20";
+
+  useEffect(() => {
+    let active = true;
+
+    if (!isTron && !isBitcoin && !isSolana && !isTon) {
+      setTronFromAddress(null);
+      setBitcoinFromAddress(null);
+      setSolanaFromAddress(null);
+      setTonFromAddress(null);
+      return () => {
+        active = false;
+      };
+    }
+
+    // TRON, Bitcoin, Solana and TON resolve their display "from" address through
+    // the wallet service (TRON base58 / BTC receive / Solana base58 / TON UQ…).
+    void walletService
+      .getSelectedReceiveAddress()
+      .then((address) => {
+        if (!active) return;
+        setBitcoinFromAddress(isBitcoin ? address : null);
+        setSolanaFromAddress(isSolana ? address : null);
+        setTronFromAddress(isTron ? address : null);
+        setTonFromAddress(isTon ? address : null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setTronFromAddress(null);
+        setBitcoinFromAddress(null);
+        setSolanaFromAddress(null);
+        setTonFromAddress(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isTron, isBitcoin, isSolana, isTon, currentChainId, selectedAccount.address]);
+
+  // Load Bitcoin fee presets (sat/vB) when on a BTC network. getBitcoinFeeQuotes
+  // never throws — it falls back to fixed rates if the provider is down.
+  useEffect(() => {
+    let active = true;
+
+    if (!isBitcoin) {
+      setBitcoinFeeQuotes(null);
+      return () => {
+        active = false;
+      };
+    }
+
+    const config = getBitcoinConfigByChainId(currentChainId);
+    if (!config) {
+      return () => {
+        active = false;
+      };
+    }
+
+    void getBitcoinFeeQuotes(config).then((quotes) => {
+      if (active) setBitcoinFeeQuotes(quotes);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isBitcoin, currentChainId]);
 
   useEffect(() => {
     setSelectedAsset(asset);
@@ -590,6 +811,8 @@ export function SendPage({
     setNativeQuote(null);
     setError(null);
     setStep("form");
+    setToAddressTouched(false);
+    setAmountTouched(false);
   }, [asset.id]);
 
   useEffect(() => {
@@ -664,8 +887,6 @@ export function SendPage({
     };
   }, [asset.id]);
 
-  const activeSendChain = getActiveSendChain(currentChainId);
-
   function handleBack() {
     if (step === "review") {
       setStep("form");
@@ -713,7 +934,7 @@ export function SendPage({
       const nextAssets = portfolio.assets.filter((item) => item.visible);
 
       if (nextAssets.length === 0) {
-        throw new Error("No assets available on selected network.");
+        throw new Error(t("send.noAssetsAvailable"));
       }
 
       const preferredAsset =
@@ -734,6 +955,11 @@ export function SendPage({
       setToAddress("");
       setSentTransaction(null);
       setStep("form");
+      setToAddressTouched(false);
+      setAmountTouched(false);
+
+      // Keep the rest of the app (e.g. Home network pill) in sync.
+      await onChanged?.();
     } catch (error) {
       const alreadyKnownHash = getAlreadyKnownTransactionHash(error);
 
@@ -760,39 +986,68 @@ export function SendPage({
     setNativeQuote(null);
     setError(null);
     setStep("form");
+    setAmountTouched(false);
   }
 
   function handleMaxAmount() {
+    setAmountTouched(false);
+    setError(null);
+    setAmountMode("asset");
+
     if (selectedAsset.type === "native") {
-      setError("For native assets, keep some balance for network gas.");
+      const balance = Number(selectedAsset.formatted);
+      const reserve = GAS_RESERVES[currentChainId] ?? 0.002;
+      const maxSend = balance - reserve;
+      if (maxSend <= 0) {
+        setError(t("send.balanceTooLowForGas"));
+        return;
+      }
+      setAmount(trimDecimal(maxSend.toFixed(8)));
       return;
     }
 
-    setError(null);
-    setAmountMode("asset");
     setAmount(selectedAsset.formatted);
+  }
+
+  async function handlePasteAddress() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const trimmed = text.trim();
+      setToAddress(trimmed);
+      setToAddressTouched(true);
+      setError(null);
+    } catch {
+      // Clipboard unavailable in this context
+    }
   }
 
   function submitForm() {
     setError(null);
+    setToAddressTouched(true);
+    setAmountTouched(true);
 
     if (isWatchOnly) {
-      setError("Watch-only account cannot send transactions.");
+      setError(t("send.watchOnlyCannotSend"));
       return;
     }
 
     if (!recipientIsValid) {
-      setError("Enter a valid recipient address.");
+      setError(t("send.invalidRecipient"));
       return;
     }
 
     if (!amountIsValid) {
-      setError("Enter a valid amount.");
+      setError(t("errors.invalidAmount"));
+      return;
+    }
+
+    if (hasInsufficientBalance) {
+      setError(t("send.insufficientSymbolBalance", { symbol: selectedAsset.symbol }));
       return;
     }
 
     if (!amountCanBeConverted) {
-      setError("USD price is unavailable for this asset.");
+      setError(t("send.noPriceForAsset"));
       return;
     }
 
@@ -810,6 +1065,8 @@ export function SendPage({
         asset: selectedAsset,
         toAddress: toAddress.trim(),
         amount: normalizedAmount,
+        // Bitcoin only — ignored by EVM/TRON.
+        feeRateSatPerVb: isBitcoin ? bitcoinFeeRate ?? undefined : undefined,
       });
 
       transactionHistoryService.addTransaction({
@@ -823,7 +1080,7 @@ export function SendPage({
         assetName: selectedAsset.name,
         contractAddress: selectedAsset.contractAddress,
         amount: normalizedAmount,
-        fromAddress: selectedAccount.address,
+        fromAddress,
         toAddress: toAddress.trim(),
         explorerUrl: result.explorerUrl,
         createdAt: new Date().toISOString(),
@@ -842,8 +1099,64 @@ export function SendPage({
     }
   }
 
+  if (isWatchOnly) {
+    return (
+      <div className="ext-popup send-page" data-screen-label="09 Send – Watch-only">
+        <div className="bar-top">
+          <button className="icbtn" type="button" onClick={onBack}>
+            <BackIcon />
+          </button>
+          <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-1)" }}>
+            {t("send.title")}
+          </div>
+        </div>
+        <div className="screen-body watch-only-guard">
+          <div className="watch-only-guard__title">{t("send.watchOnlyTitle")}</div>
+          <div className="watch-only-guard__text">
+            {t("send.watchOnlyDescription")}
+          </div>
+          <button className="btn secondary lg full" type="button" onClick={onBack}>
+            {t("common.backToWallet")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Network selection — the shared full-screen selector (no modal/sheet).
+  // Back returns to the Send form unchanged; selecting switches the network.
+  if (networkSelectorOpen) {
+    return (
+      <SelectNetworkPage
+        purpose="send"
+        selectedChainId={currentChainId}
+        onSelect={(chainId) => void selectNetwork(chainId)}
+        onBack={() => setNetworkSelectorOpen(false)}
+      />
+    );
+  }
+
+  // Asset selection — full-screen picker (no modal/sheet). Back leaves the
+  // selected asset unchanged; selecting updates the Send form (recipient kept,
+  // amount cleared by selectAsset).
+  if (assetSelectorOpen) {
+    return (
+      <SelectSendAssetPage
+        assets={availableAssets}
+        selectedAssetId={selectedAsset.id}
+        networkLabel={networkLabel}
+        hideBalances={hideBalances}
+        onSelect={(nextAsset) => {
+          selectAsset(nextAsset);
+          setAssetSelectorOpen(false);
+        }}
+        onBack={() => setAssetSelectorOpen(false)}
+      />
+    );
+  }
+
   return (
-    <div className="ext-popup" data-screen-label="09 Send">
+    <div className="ext-popup send-page" data-screen-label="09 Send">
       <div className="bar-top">
         <button className="icbtn" type="button" onClick={handleBack}>
           <BackIcon />
@@ -856,7 +1169,7 @@ export function SendPage({
             color: "var(--ink-1)",
           }}
         >
-          Send
+          {t("send.title")}
         </div>
 
         <span style={{ flex: 1 }} />
@@ -865,10 +1178,10 @@ export function SendPage({
           className="net-chip network-pill-button send-network-chip"
           type="button"
           onClick={() => setNetworkSelectorOpen(true)}
-          aria-label="Select network"
-          title="Select network"
+          aria-label={t("common.selectNetwork")}
+          title={t("common.selectNetwork")}
         >
-          <span className="dot network-pill-dot" />
+          <NetworkIcon chainId={currentChainId} size={16} showTestnetBadge={false} />
           {networkLabel}
         </button>
       </div>
@@ -880,7 +1193,9 @@ export function SendPage({
           gap: 16,
         }}
       >
+        {/* Hero: asset icon + name + balance */}
         <section
+          className="send-hero"
           style={{
             display: "grid",
             gridTemplateColumns: "46px 1fr",
@@ -889,23 +1204,17 @@ export function SendPage({
             paddingTop: 6,
           }}
         >
-          <div
-            className="tok"
-            style={{
-              width: 46,
-              height: 46,
-              minWidth: 46,
-              maxWidth: 46,
-              background: "var(--ink-1)",
-              color: "var(--ink-on-dark)",
-            }}
-          >
-            {selectedAsset.symbol.slice(0, 1).toUpperCase()}
-          </div>
+          <AssetIcon
+            ticker={selectedAsset.symbol}
+            logoURI={selectedAsset.logoUrl}
+            address={selectedAsset.contractAddress}
+            chainId={selectedAsset.chainId}
+            size={46}
+          />
 
           <div style={{ minWidth: 0 }}>
             <div className="t-h2" style={{ fontSize: 30 }}>
-              Send {selectedAsset.symbol}
+              {t("send.sendSymbol", { symbol: selectedAsset.symbol })}
             </div>
 
             <div
@@ -918,14 +1227,18 @@ export function SendPage({
                 whiteSpace: "nowrap",
               }}
             >
-              Balance: {hideBalances ? "••••" : formatAssetBalance(selectedAsset)} {selectedAsset.symbol}
+              {t("send.balanceLine", {
+                amount: hideBalances ? "••••" : formatAssetBalance(selectedAsset),
+                symbol: selectedAsset.symbol,
+              })}
             </div>
           </div>
         </section>
 
+        {/* Asset selector card */}
         <section className="send-asset-compact">
           <div className="sect-head">
-            <div className="lbl">Asset to send</div>
+            <div className="lbl">{t("send.assetToSend")}</div>
 
             <button
               type="button"
@@ -933,7 +1246,7 @@ export function SendPage({
               onClick={() => setAssetSelectorOpen(true)}
               disabled={loadingAssets}
             >
-              {loadingAssets ? "Loading…" : "Change"}
+              {loadingAssets ? t("common.loading") : t("common.change")}
             </button>
           </div>
 
@@ -942,9 +1255,14 @@ export function SendPage({
             className="send-asset-card"
             onClick={() => setAssetSelectorOpen(true)}
           >
-            <span className="tok send-asset-card__icon">
-              {selectedAsset.symbol.slice(0, 1).toUpperCase()}
-            </span>
+            <AssetIcon
+              ticker={selectedAsset.symbol}
+              logoURI={selectedAsset.logoUrl}
+              address={selectedAsset.contractAddress}
+              chainId={selectedAsset.chainId}
+              size={42}
+              className="send-asset-card__icon"
+            />
 
             <span className="send-asset-card__body">
               <strong>{selectedAsset.symbol}</strong>
@@ -961,13 +1279,13 @@ export function SendPage({
         </section>
 
         {isWatchOnly ? (
-          <Notice title="Watch-only account" tone="warning">
-            This account can receive assets, but cannot sign outgoing transactions.
+          <Notice title={t("send.watchOnlyTitle")} tone="warning">
+            {t("send.watchOnlyNotice")}
           </Notice>
         ) : null}
 
         {error ? (
-          <Notice title="Send error" tone="danger">
+          <Notice title={t("send.error")} tone="danger">
             {error}
           </Notice>
         ) : null}
@@ -980,23 +1298,56 @@ export function SendPage({
               submitForm();
             }}
           >
-            <label style={{ display: "grid", gap: 6 }}>
-              <SectionLabel left="Recipient address" />
+            {/* Recipient address */}
+            <div className="send-field" style={{ display: "grid", gap: 6 }}>
+              <SectionLabel left={t("send.recipientAddress")} />
 
-              <input
-                className="input lg"
-                value={toAddress}
-                placeholder="0x..."
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(event) => {
-                  setToAddress(event.target.value);
-                  setError(null);
-                }}
-              />
-            </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  className={`input lg${toAddressError ? " input--error" : ""}`}
+                  value={toAddress}
+                  placeholder={
+                    isTron
+                      ? "T..."
+                      : isBitcoin
+                        ? currentChainId === BITCOIN_TESTNET_CHAIN_ID
+                          ? "tb1q..."
+                          : "bc1q..."
+                        : isSolana
+                          ? t("send.solanaRecipientPlaceholder")
+                          : "0x..."
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setToAddress(event.target.value);
+                    setError(null);
+                    if (!toAddressTouched && event.target.value.length >= 4) {
+                      setToAddressTouched(true);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (toAddress.length > 0) setToAddressTouched(true);
+                  }}
+                  style={{ paddingRight: 72, width: "100%" }}
+                />
+                <button
+                  type="button"
+                  className="send-paste-btn"
+                  onClick={() => void handlePasteAddress()}
+                  aria-label={t("send.pasteAddress")}
+                >
+                  {t("common.paste")}
+                </button>
+              </div>
 
-            <label style={{ display: "grid", gap: 6 }}>
+              {toAddressError ? (
+                <div className="send-field-error">{toAddressError}</div>
+              ) : null}
+            </div>
+
+            {/* Amount */}
+            <div className="send-field" style={{ display: "grid", gap: 6 }}>
               <div
                 style={{
                   display: "flex",
@@ -1005,7 +1356,7 @@ export function SendPage({
                   gap: 10,
                 }}
               >
-                <SectionLabel left="Amount" />
+                <SectionLabel left={t("common.amount")} />
 
                 <button
                   type="button"
@@ -1018,13 +1369,13 @@ export function SendPage({
                     color: "var(--secure)",
                   }}
                 >
-                  Max
+                  {t("common.max")}
                 </button>
               </div>
 
               <div style={{ position: "relative" }}>
                 <input
-                  className="input lg"
+                  className={`input lg${amountError ? " input--error" : ""}`}
                   value={amount}
                   placeholder="0.00"
                   inputMode="decimal"
@@ -1032,6 +1383,12 @@ export function SendPage({
                   onChange={(event) => {
                     setAmount(event.target.value);
                     setError(null);
+                    if (!amountTouched && event.target.value.length >= 1) {
+                      setAmountTouched(true);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (amount.length > 0) setAmountTouched(true);
                   }}
                   style={{ paddingRight: 70 }}
                 />
@@ -1040,7 +1397,7 @@ export function SendPage({
                   type="button"
                   className="amount-unit-toggle"
                   onClick={toggleAmountMode}
-                  title="Switch amount currency"
+                  title={t("send.switchCurrency")}
                   style={{
                     position: "absolute",
                     right: 8,
@@ -1053,47 +1410,216 @@ export function SendPage({
                     : selectedAsset.symbol}
                 </button>
               </div>
-            </label>
 
-            <section className="row-list">
-              <MetaRow label="From" value={shortAddress(selectedAccount.address)} />
-              <MetaRow label="Network" value={networkLabel} />
-              <MetaRow
-                label="Asset"
-                value={selectedAsset.type === "native" ? "Native" : "ERC-20"}
-              />
+              {amountError ? (
+                <div className="send-field-error">{amountError}</div>
+              ) : fiatEstimate ? (
+                <div className="send-fiat-estimate">{fiatEstimate}</div>
+              ) : null}
+            </div>
+
+            <section className="row-list send-summary">
+              <MetaRow label={t("common.from")} value={shortAddress(fromAddress)} />
+              <MetaRow label={t("common.network")} value={networkLabel} />
+              {!isBitcoin ? (
+                <MetaRow label={t("home.assetHeader")} value={assetStandardLabel} />
+              ) : null}
             </section>
 
+            {/* Bitcoin: network-fee preset (sat/vB) instead of gas language. */}
+            {isBitcoin ? (
+              <section className="send-field" style={{ display: "grid", gap: 8 }}>
+                <SectionLabel
+                  left={t("send.networkFee")}
+                  right={
+                    bitcoinFeeQuotes?.isFallback
+                      ? t("send.feesEstimatedOffline")
+                      : undefined
+                  }
+                />
+
+                <div
+                  role="group"
+                  aria-label={t("send.bitcoinFeeSpeed")}
+                  style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}
+                >
+                  {(["slow", "normal", "fast"] as BitcoinFeePreset[]).map(
+                    (preset) => {
+                      const quote = bitcoinFeeQuotes?.[preset];
+                      const active = bitcoinFeePreset === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          className={`btn ${active ? "primary" : "secondary"}`}
+                          onClick={() => setBitcoinFeePreset(preset)}
+                          style={{
+                            display: "grid",
+                            gap: 2,
+                            padding: "8px 6px",
+                            textTransform: "capitalize",
+                          }}
+                        >
+                          <strong style={{ fontSize: 13 }}>
+                            {t(`send.feePreset.${preset}`)}
+                          </strong>
+                          <small style={{ fontSize: 11, opacity: 0.8 }}>
+                            {quote ? `${quote.satPerVb} sat/vB` : "…"}
+                          </small>
+                        </button>
+                      );
+                    },
+                  )}
+                </div>
+
+                {bitcoinEstimatedFeeBtc ? (
+                  <div className="send-meta-row">
+                    <span className="send-meta-label">{t("send.estimatedFee")}</span>
+                    <strong className="send-meta-value">
+                      ≈ {bitcoinEstimatedFeeBtc} BTC
+                      {bitcoinFeeRate != null ? ` · ${bitcoinFeeRate} sat/vB` : ""}
+                    </strong>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {isTron ? (
+              <Notice title={t("send.tronResourcesTitle")} tone="warning">
+                {t("send.tronResourcesBody")}
+              </Notice>
+            ) : null}
+
+            {isSolana ? (
+              <Notice title={t("send.solanaFeeTitle")} tone="warning">
+                {t("send.solanaFeeBody")}
+              </Notice>
+            ) : null}
+
+            {tonEstimatedFeeText ? (
+              <div className="send-meta-row">
+                <span className="send-meta-label">{t("send.estimatedFee")}</span>
+                <strong className="send-meta-value">{tonEstimatedFeeText}</strong>
+              </div>
+            ) : null}
+
             <button
-              className="btn primary lg full"
+              className="btn primary lg full send-submit"
               type="submit"
               disabled={!canContinue || isWatchOnly}
               style={{ marginTop: 4 }}
             >
-              Continue
+              {t("common.continue")}
             </button>
           </form>
         ) : null}
 
         {step === "review" ? (
           <section style={{ display: "grid", gap: 12 }}>
+            {/* Review header: asset icon + amount summary */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "4px 0 4px",
+              }}
+            >
+              <AssetIcon
+                ticker={selectedAsset.symbol}
+                logoURI={selectedAsset.logoUrl}
+                address={selectedAsset.contractAddress}
+                chainId={selectedAsset.chainId}
+                size={44}
+              />
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 800,
+                    letterSpacing: "-0.03em",
+                    lineHeight: 1.1,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {normalizedAmount} {selectedAsset.symbol}
+                </div>
+                <div
+                  style={{
+                    marginTop: 3,
+                    color: "var(--ink-3)",
+                    fontSize: 13,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {t("activity.toAddress", { address: shortAddress(toAddress.trim()) })}
+                </div>
+              </div>
+            </div>
+
             <section style={{ display: "grid", gap: 8 }}>
-              <SectionLabel left="Review transfer" />
+              <SectionLabel left={t("send.reviewTransfer")} />
 
               <div className="row-list">
                 <MetaRow
-                  label="Amount"
+                  label={t("common.amount")}
                   value={`${normalizedAmount} ${selectedAsset.symbol}`}
                 />
-                <MetaRow label="To" value={shortAddress(toAddress.trim())} />
-                <MetaRow label="From" value={shortAddress(selectedAccount.address)} />
-                <MetaRow label="Network" value={networkLabel} />
-                <MetaRow label="Asset" value={selectedAsset.symbol} />
+                <MetaRow label={t("common.to")} value={shortAddress(toAddress.trim())} />
+                <MetaRow label={t("common.from")} value={shortAddress(fromAddress)} />
+                {isBitcoin && bitcoinEstimatedFeeBtc ? (
+                  <MetaRow
+                    label={t("send.networkFee")}
+                    value={`≈ ${bitcoinEstimatedFeeBtc} BTC${
+                      bitcoinFeeRate != null ? ` (${bitcoinFeeRate} sat/vB)` : ""
+                    }`}
+                  />
+                ) : null}
+                {isBitcoin && bitcoinTotalBtc ? (
+                  <MetaRow label={t("common.total")} value={`≈ ${bitcoinTotalBtc} BTC`} />
+                ) : null}
+                {tonEstimatedFeeText ? (
+                  <MetaRow label={t("send.networkFee")} value={tonEstimatedFeeText} />
+                ) : null}
+                {tonTotalText ? (
+                  <MetaRow label={t("common.total")} value={tonTotalText} />
+                ) : null}
+                <MetaRow label={t("common.network")} value={networkLabel} />
+                {!isBitcoin ? (
+                  <MetaRow label={t("home.assetHeader")} value={selectedAsset.symbol} />
+                ) : null}
               </div>
+
+              {/* Change handling hidden under details (BTC). */}
+              {isBitcoin ? (
+                <details className="send-change-details">
+                  <summary
+                    style={{
+                      cursor: "pointer",
+                      fontSize: 12,
+                      color: "var(--ink-3)",
+                      padding: "2px 0",
+                    }}
+                  >
+                    {t("send.advancedDetails")}
+                  </summary>
+                  <div className="row-list" style={{ marginTop: 6 }}>
+                    <MetaRow
+                      label={t("common.change")}
+                      value={t("send.changeReturnsNote")}
+                    />
+                    <MetaRow label={t("common.fee")} value={t("send.feeRecalcNote")} />
+                  </div>
+                </details>
+              ) : null}
             </section>
 
-            <Notice title="Check carefully" tone="warning">
-              Transactions cannot be cancelled after they are sent.
+            <Notice title={t("send.checkCarefullyTitle")} tone="warning">
+              {t("send.checkCarefullyBody")}
             </Notice>
 
             <button
@@ -1103,7 +1629,7 @@ export function SendPage({
               disabled={sending}
             >
               <SendIcon />
-              {sending ? "Sending…" : "Send transaction"}
+              {sending ? t("send.sending") : t("send.sendTransaction")}
             </button>
 
             <button
@@ -1112,7 +1638,7 @@ export function SendPage({
               onClick={() => setStep("form")}
               disabled={sending}
             >
-              Edit details
+              {t("send.editDetails")}
             </button>
           </section>
         ) : null}
@@ -1135,11 +1661,7 @@ export function SendPage({
             </div>
 
             <div>
-              <div className="t-h2">
-                Transaction
-                <br />
-                sent
-              </div>
+              <div className="t-h2">{t("send.transactionSent")}</div>
 
               <div
                 style={{
@@ -1149,14 +1671,14 @@ export function SendPage({
                   lineHeight: 1.45,
                 }}
               >
-                Your {selectedAsset.symbol} transfer was submitted to the network.
+                {t("send.transactionSubmitted", { symbol: selectedAsset.symbol })}
               </div>
             </div>
 
             <div className="row-list">
-              <MetaRow label="Hash" value={shortAddress(sentTransaction.hash)} />
+              <MetaRow label={t("common.hash")} value={shortAddress(sentTransaction.hash)} />
               <MetaRow
-                label="Amount"
+                label={t("common.amount")}
                 value={`${normalizedAmount} ${selectedAsset.symbol}`}
               />
             </div>
@@ -1170,161 +1692,16 @@ export function SendPage({
                 style={{ textDecoration: "none" }}
               >
                 <ExternalIcon />
-                Open in explorer
+                {t("common.openInExplorer")}
               </a>
             ) : null}
 
             <button className="btn primary lg full" type="button" onClick={onSent}>
-              Done
+              {t("common.done")}
             </button>
           </section>
         ) : null}
       </div>
-
-      {networkSelectorOpen ? (
-        <div className="send-network-sheet-backdrop">
-          <button
-            type="button"
-            className="send-network-sheet-scrim"
-            aria-label="Close network selector"
-            onClick={() => setNetworkSelectorOpen(false)}
-          />
-
-          <section className="send-network-sheet">
-            <div className="send-network-sheet-head">
-              <div>
-                <div className="send-network-sheet-title">Select network</div>
-                <div className="send-network-sheet-subtitle">
-                  Current: {activeSendChain.name}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="icbtn"
-                aria-label="Close network selector"
-                onClick={() => setNetworkSelectorOpen(false)}
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="row-list">
-              {SEND_CHAIN_OPTIONS.map((chain) => {
-                const active = chain.chainId === currentChainId;
-
-                return (
-                  <button
-                    key={chain.chainId}
-                    type="button"
-                    className="row send-network-sheet-row"
-                    onClick={() => void selectNetwork(chain.chainId)}
-                    style={{
-                      width: "100%",
-                      border: 0,
-                      background: active ? "var(--bg-sunken)" : "transparent",
-                      textAlign: "left",
-                    }}
-                  >
-                    <div className="tok">
-                      <CrosshairIcon />
-                    </div>
-
-                    <div className="body">
-                      <div className="nm">{chain.name}</div>
-                      <div className="sub">{chain.subtitle}</div>
-                    </div>
-
-                    <div className="num">
-                      <div
-                        className="v"
-                        style={active ? { color: "var(--secure)" } : undefined}
-                      >
-                        {active ? "Active" : "›"}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {assetSelectorOpen ? (
-        <div className="asset-sheet-backdrop">
-          <button
-            type="button"
-            className="asset-sheet-scrim"
-            aria-label="Close asset selector"
-            onClick={() => setAssetSelectorOpen(false)}
-          />
-
-          <section className="asset-sheet">
-            <div className="asset-sheet-head">
-              <div>
-                <div className="asset-sheet-title">Select asset</div>
-                <div className="asset-sheet-subtitle">
-                  Choose token to send on {networkLabel}.
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="icbtn"
-                aria-label="Close asset selector"
-                onClick={() => setAssetSelectorOpen(false)}
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="row-list">
-              {availableAssets.map((item) => {
-                const active = item.id === selectedAsset.id;
-
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="row asset-sheet-row"
-                    onClick={() => {
-                      selectAsset(item);
-                      setAssetSelectorOpen(false);
-                    }}
-                    style={{
-                      width: "100%",
-                      border: 0,
-                      background: active ? "var(--bg-sunken)" : "transparent",
-                      textAlign: "left",
-                    }}
-                  >
-                    <div className="tok">
-                      {item.symbol.slice(0, 1).toUpperCase()}
-                    </div>
-
-                    <div className="body">
-                      <div className="nm">{item.symbol}</div>
-                      <div className="sub">{item.name}</div>
-                    </div>
-
-                    <div className="num">
-                      <div className="v">{hideBalances ? "••••" : formatAssetBalance(item)}</div>
-                      <div
-                        className="q"
-                        style={active ? { color: "var(--secure)" } : undefined}
-                      >
-                        {active ? "Selected" : item.symbol}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      ) : null}
-
 
     </div>
   );

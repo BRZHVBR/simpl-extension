@@ -1,31 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 
+import type { WalletState } from "../../core/storage/storage.types";
 import { walletService } from "../../core/wallet/wallet.service";
-import {
-  SimpleInstrumentIcon,
-  type SimpleInstrument,
-} from "../components/SimpleInstrumentIcon";
+import { useTranslation } from "../../i18n";
+import { suppressBiometricAutoPromptOnce } from "../biometric-autoprompt";
+import { BiometricUnlockRow } from "../components/BiometricUnlockRow";
 
 import SeedBackupVerificationPage from "./SeedBackupVerificationPage";
 import ConnectedSitesPage from "./ConnectedSitesPage";
-
-type SecurityStatus = "secure" | "warning" | "danger" | "unknown";
 
 type Snapshot = Record<string, unknown>;
 
 type SecurityCenterPageProps = {
   onBack?: () => void;
   initialSnapshot?: Snapshot;
-};
-
-type SecurityCheck = {
-  id: string;
-  title: string;
-  subtitle: string;
-  status: SecurityStatus;
-  value: string;
-  onClick?: () => void | Promise<void>;
+  // Live wallet state + change notifier, used by the biometric unlock control
+  // (capability detection + secure enroll/disable). Optional so the page still
+  // renders if a caller omits them; the biometric row simply won't show.
+  walletState?: WalletState;
+  onChanged?: () => void | Promise<void>;
+  // Destructive wallet removal, owned by the caller (Settings) so the deletion
+  // behaviour stays identical to before. The Danger Zone UI + confirmation live
+  // here; this fires the actual clear after the user confirms.
+  onClearWallet?: () => void | Promise<void>;
+  // When true (deep-linked from "Reset wallet data" on a primary account),
+  // scroll the Danger Zone into view on mount instead of starting at the top.
+  focusDanger?: boolean;
 };
 
 const AUTO_LOCK_OPTIONS = [1, 5, 15, 30, 60] as const;
@@ -329,171 +330,214 @@ async function updateRootSettings(
   });
 }
 
-function getStatusColor(status: SecurityStatus): string {
-  switch (status) {
-    case "secure":
-      return "var(--secure, #3f6f2c)";
-    case "warning":
-      return "#8a6200";
-    case "danger":
-      return "#a23b2d";
-    case "unknown":
-      return "var(--text-secondary, #777777)";
-    default:
-      return "var(--text-secondary, #777777)";
-  }
-}
-
-const styles: Record<string, CSSProperties> = {
-  page: {
-    height: "100vh",
-    minHeight: "100vh",
-    width: "100%",
-    background: "var(--bg, #ffffff)",
-    color: "var(--text-primary, #111111)",
-    overflowY: "auto",
-    overflowX: "hidden",
-    WebkitOverflowScrolling: "touch",
-  },
-  topbar: {
-    position: "sticky",
-    top: 0,
-    zIndex: 20,
-    height: 56,
-    borderBottom: "1px solid var(--border, #e8e8e8)",
-    background: "var(--bg, #ffffff)",
-  },
-  topbarInner: {
-    width: "100%",
-    maxWidth: 680,
-    height: "100%",
-    margin: "0 auto",
-    padding: "0 12px",
-    boxSizing: "border-box",
-    display: "grid",
-    gridTemplateColumns: "44px 1fr 44px",
-    alignItems: "center",
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    border: 0,
-    background: "transparent",
-    color: "var(--text-primary, #111111)",
-    cursor: "pointer",
-    fontSize: 22,
-    lineHeight: "36px",
-    padding: 0,
-  },
-  topbarTitle: {
-    fontSize: 15,
-    lineHeight: "20px",
-    fontWeight: 800,
-  },
-  content: {
-    width: "100%",
-    maxWidth: 680,
-    margin: "0 auto",
-    padding: "20px 12px 88px",
-    boxSizing: "border-box",
-  },
-  section: {
-    marginTop: 28,
-  },
-  sectionLabel: {
-    margin: "0 0 12px",
-    color: "var(--text-primary, #111111)",
-    fontSize: 12,
-    lineHeight: "16px",
-    letterSpacing: "0.2em",
-    textTransform: "uppercase",
-  },
-  note: {
-    marginTop: 14,
-    padding: 14,
-    borderRadius: 14,
-    background: "var(--bg-sunken, #f7f7f4)",
-    color: "var(--text-secondary, #666666)",
-    fontSize: 12,
-    lineHeight: "18px",
-  },
-};
+type RowTone = "neutral" | "secure" | "warn" | "danger";
+type PillTone = "secure" | "warn" | "danger" | "neutral";
 
 function BackIcon() {
   return <span style={{ fontSize: 22, lineHeight: 1 }}>‹</span>;
 }
 
-function SectionLabel({ children }: { children: ReactNode }) {
-  return <div style={styles.sectionLabel}>{children}</div>;
+function Chevron() {
+  return (
+    <svg
+      className="set-row__chev"
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
 }
 
-type RowProps = {
-  icon?: ReactNode;
-  instrument?: SimpleInstrument;
-  title: string;
-  subtitle?: string;
-  value?: string;
-  valueColor?: string;
-  onClick?: () => void | Promise<void>;
-};
-
-function Row({ icon, instrument, title, subtitle, value, valueColor, onClick }: RowProps) {
-  const body = (
-    <>
-      {instrument ? (
-        <SimpleInstrumentIcon instrument={instrument} />
-      ) : (
-        <div className="tok">{icon}</div>
-      )}
-
-      <div className="body">
-        <div className="nm">{title}</div>
-        {subtitle ? <div className="sub">{subtitle}</div> : null}
-      </div>
-
-      <div className="num">
-        <div className="v" style={valueColor ? { color: valueColor } : undefined}>
-          {value ?? (onClick ? "›" : "")}
-        </div>
-      </div>
-    </>
+function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z" />
+      <path d="M9.5 12l1.8 1.8 3.2-3.6" />
+    </svg>
   );
+}
 
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className="row"
-        onClick={() => void onClick()}
-        style={{
-          width: "100%",
-          border: 0,
-          background: "transparent",
-          textAlign: "left",
-        }}
-      >
-        {body}
-      </button>
-    );
-  }
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </svg>
+  );
+}
 
-  return <div className="row">{body}</div>;
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="11" width="14" height="9" rx="2.5" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+function DocShieldIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20V3.5z" />
+      <path d="M13 3.5V9h5" />
+      <path d="M9.5 14l2 2 3-3.4" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4l16 16" />
+      <path d="M9.9 5.2A9 9 0 0 1 12 5c5 0 9 5 9 7a12 12 0 0 1-2.2 2.8M6.4 7.6A12.6 12.6 0 0 0 3 12c0 2 4 7 9 7a8.8 8.8 0 0 0 3.3-.6" />
+      <path d="M9.8 10.2a3 3 0 0 0 4 4.2" />
+    </svg>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 14.5l5-5" />
+      <path d="M8 11l-2 2a3.5 3.5 0 0 0 5 5l2-2" />
+      <path d="M16 13l2-2a3.5 3.5 0 0 0-5-5l-2 2" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+function Pill({ tone, children }: { tone: PillTone; children: ReactNode }) {
+  return <span className={`set-row__pill set-row__pill--${tone}`}>{children}</span>;
+}
+
+function Toggle({
+  checked,
+  onClick,
+  label,
+}: {
+  checked: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={`set-toggle${checked ? " set-toggle--on" : ""}`}
+      onClick={onClick}
+    >
+      <span className="set-toggle__knob" />
+    </button>
+  );
+}
+
+function Section({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section className="set-section">
+      <div className="set-section__label">{label}</div>
+      <div className="set-card">{children}</div>
+    </section>
+  );
+}
+
+// Clickable row (full-width button) with a tinted icon + right-side affordance.
+function ActionRow({
+  icon,
+  tone = "neutral",
+  title,
+  subtitle,
+  aside,
+  onClick,
+}: {
+  icon: ReactNode;
+  tone?: RowTone;
+  title: string;
+  subtitle: string;
+  aside?: ReactNode;
+  onClick: () => void | Promise<void>;
+}) {
+  return (
+    <button type="button" className="set-row" onClick={() => void onClick()}>
+      <span className={`set-row__icon set-row__icon--${tone}`}>{icon}</span>
+      <span className="set-row__body">
+        <span className="set-row__title">{title}</span>
+        <span className="set-row__sub">{subtitle}</span>
+      </span>
+      <span className="set-row__aside">{aside ?? <Chevron />}</span>
+    </button>
+  );
+}
+
+// Status-only / control row (not a navigation button).
+function StatusRow({
+  icon,
+  tone = "neutral",
+  title,
+  subtitle,
+  aside,
+}: {
+  icon: ReactNode;
+  tone?: RowTone;
+  title: string;
+  subtitle: string;
+  aside: ReactNode;
+}) {
+  return (
+    <div className="set-row set-row--static">
+      <span className={`set-row__icon set-row__icon--${tone}`}>{icon}</span>
+      <span className="set-row__body">
+        <span className="set-row__title">{title}</span>
+        <span className="set-row__sub">{subtitle}</span>
+      </span>
+      <span className="set-row__aside">{aside}</span>
+    </div>
+  );
 }
 
 export default function SecurityCenterPage({
   onBack,
   initialSnapshot = {},
+  onClearWallet,
+  focusDanger = false,
+  walletState,
+  onChanged,
 }: SecurityCenterPageProps) {
-  const pageRef = useRef<HTMLElement | null>(null);
+  const { t } = useTranslation();
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const dangerRef = useRef<HTMLElement | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>({});
   const [showSeedBackupVerification, setShowSeedBackupVerification] = useState(false);
   const [isAutoLockSheetOpen, setIsAutoLockSheetOpen] = useState(false);
   const [showConnectedSites, setShowConnectedSites] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
+    // Deep-linked from "Reset wallet data": reveal the Danger Zone. Otherwise
+    // start at the top like a normal page open.
+    if (focusDanger && dangerRef.current) {
+      dangerRef.current.scrollIntoView({ block: "center" });
+      return;
+    }
     pageRef.current?.scrollTo({ top: 0 });
     window.scrollTo({ top: 0 });
-  }, []);
+  }, [focusDanger]);
 
   useEffect(() => {
     let isMounted = true;
@@ -617,6 +661,9 @@ export default function SecurityCenterPage({
   };
 
   const lockWallet = async () => {
+    // User-initiated lock: suppress the one-shot biometric auto-prompt on the
+    // unlock screen we are about to show (explicit tap still works).
+    suppressBiometricAutoPromptOnce();
     walletService.lockWallet();
 
     window.dispatchEvent(
@@ -629,89 +676,6 @@ export default function SecurityCenterPage({
 
     onBack?.();
   };
-
-  const checks: SecurityCheck[] = useMemo(() => {
-    const autoLockIsStrong =
-      typeof securityState.autoLockMinutes === "number" &&
-      securityState.autoLockMinutes > 0 &&
-      securityState.autoLockMinutes <= 15;
-
-    const autoLockIsWeak =
-      typeof securityState.autoLockMinutes === "number" &&
-      securityState.autoLockMinutes > 15;
-
-    const list: SecurityCheck[] = [
-      {
-        id: "encrypted-vault",
-        title: "Encrypted vault",
-        subtitle: securityState.encryptedVaultExists
-          ? "Wallet secrets are stored in an encrypted local vault."
-          : "Encrypted vault was not detected in local wallet storage.",
-        status: securityState.encryptedVaultExists ? "secure" : "danger",
-        value: securityState.encryptedVaultExists ? "Secure" : "Risk",
-      },
-      {
-        id: "auto-lock",
-        title: "Auto-lock",
-        subtitle:
-          typeof securityState.autoLockMinutes === "number"
-            ? `Wallet locks after ${securityState.autoLockMinutes} min of inactivity.`
-            : "Auto-lock setting was not detected.",
-        status: autoLockIsStrong ? "secure" : autoLockIsWeak ? "warning" : "unknown",
-        value:
-          typeof securityState.autoLockMinutes === "number"
-            ? `${securityState.autoLockMinutes} min`
-            : "Unknown",
-        onClick: changeAutoLock,
-      },
-      {
-        id: "recovery-backup",
-        title: "Recovery phrase backup",
-        subtitle:
-          securityState.seedBackupVerified === true
-            ? "Recovery phrase backup was verified."
-            : securityState.seedBackupConfirmed === true
-              ? "Backup was confirmed, but word check is not completed."
-              : "Select random recovery words to verify backup.",
-        status: securityState.seedBackupVerified === true ? "secure" : "warning",
-        value: securityState.seedBackupVerified === true ? "Verified" : "Review",
-        onClick: () => setShowSeedBackupVerification(true),
-      },
-    ];
-
-    if (typeof securityState.hideBalances === "boolean") {
-      list.push({
-        id: "hide-balances",
-        title: "Hide balances",
-        subtitle: securityState.hideBalances
-          ? "Balance privacy mode is enabled."
-          : "Balance privacy mode is disabled.",
-        status: securityState.hideBalances ? "secure" : "warning",
-        value: securityState.hideBalances ? "On" : "Off",
-        onClick: toggleHideBalances,
-      });
-    }
-
-    return list;
-  }, [securityState, initialSnapshot]);
-
-  const checksById = new Map(checks.map((check) => [check.id, check]));
-
-  const deviceCheckIds = ["encrypted-vault", "auto-lock"] as const;
-  const recoveryCheckIds = ["recovery-backup"] as const;
-  const privacyCheckIds = ["hide-balances"] as const;
-
-  const renderCheckRow = (check: SecurityCheck) => (
-    <Row
-      key={check.id}
-      instrument="security"
-      title={check.title}
-      subtitle={check.subtitle}
-      value={check.value}
-      valueColor={getStatusColor(check.status)}
-      onClick={check.onClick}
-    />
-  );
 
   if (showConnectedSites) {
     return <ConnectedSitesPage onBack={() => setShowConnectedSites(false)} />;
@@ -726,107 +690,159 @@ export default function SecurityCenterPage({
     );
   }
 
+  const verified = securityState.seedBackupVerified === true;
+  const hideBalances = securityState.hideBalances === true;
+  const connectedCount = securityState.connectedSitesCount;
+  const autoLockLabel =
+    typeof securityState.autoLockMinutes === "number"
+      ? t("common.minutesShort", { minutes: securityState.autoLockMinutes })
+      : t("common.notSet");
+
   return (
-    <main ref={pageRef} style={styles.page}>
-      <header style={styles.topbar}>
-        <div style={styles.topbarInner}>
-          <button type="button" onClick={onBack} style={styles.backButton} aria-label="Back">
-            <BackIcon />
-          </button>
-          <div style={styles.topbarTitle}>Security Center</div>
-          <div />
+    <div
+      className="ext-popup settings-page security-center-page"
+      data-screen-label="Security Center"
+    >
+      <div className="bar-top">
+        <button className="icbtn" type="button" onClick={onBack} aria-label={t("common.back")}>
+          <BackIcon />
+        </button>
+        <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-1)" }}>
+          {t("security.centerTitle")}
         </div>
-      </header>
+        <span style={{ flex: 1 }} />
+        <span className="reveal-bar-icon" aria-hidden="true">
+          <ShieldIcon />
+        </span>
+      </div>
 
-      <section style={styles.content}>
-        <section style={{ ...styles.section, marginTop: 0 }}>
-          <SectionLabel>Device security</SectionLabel>
+      <div className="screen-body settings-body" ref={pageRef}>
+        <header className="set-hero">
+          <div className="set-hero__title">{t("security.heroTitle")}</div>
+          <div className="set-hero__sub">
+            {t("security.heroSub")}
+          </div>
+        </header>
 
-          <div className="row-list">
-            {deviceCheckIds
-              .map((id) => checksById.get(id))
-              .filter((check): check is SecurityCheck => Boolean(check))
-              .map(renderCheckRow)}
+        <div className="set-grid">
+          <Section label={t("security.section.device")}>
+            {/* Biometric unlock — self-hides on unsupported devices. */}
+            {walletState && onChanged ? (
+              <BiometricUnlockRow
+                walletState={walletState}
+                onChanged={onChanged}
+              />
+            ) : null}
 
-            <Row
-              instrument="security"
-              title="Lock wallet"
-              subtitle="Return to unlock screen."
-              value="›"
+            <ActionRow
+              icon={<ClockIcon />}
+              tone="neutral"
+              title={t("security.autoLock")}
+              subtitle={t("security.autoLockSub")}
+              aside={
+                <>
+                  <span className="set-row__value">{autoLockLabel}</span>
+                  <Chevron />
+                </>
+              }
+              onClick={changeAutoLock}
+            />
+
+            <ActionRow
+              icon={<LockIcon />}
+              tone="neutral"
+              title={t("security.lockWallet")}
+              subtitle={t("security.lockWalletSub")}
               onClick={lockWallet}
             />
-          </div>
-        </section>
+          </Section>
 
-        <section style={styles.section}>
-          <SectionLabel>Recovery</SectionLabel>
-
-          <div className="row-list">
-            {recoveryCheckIds
-              .map((id) => checksById.get(id))
-              .filter((check): check is SecurityCheck => Boolean(check))
-              .map(renderCheckRow)}
-          </div>
-        </section>
-
-        <section style={styles.section}>
-          <SectionLabel>Privacy</SectionLabel>
-
-          <div className="row-list">
-            {privacyCheckIds
-              .map((id) => checksById.get(id))
-              .filter((check): check is SecurityCheck => Boolean(check))
-              .map(renderCheckRow)}
-
-            <Row
-              instrument="dapps"
-              title="Connected sites"
+          <Section label={t("security.section.recovery")}>
+            <ActionRow
+              icon={<DocShieldIcon />}
+              tone={verified ? "secure" : "warn"}
+              title={t("security.recoveryBackup")}
               subtitle={
-                securityState.connectedSitesCount > 0
-                  ? `${securityState.connectedSitesCount} site${securityState.connectedSitesCount !== 1 ? "s" : ""} connected. Review regularly.`
-                  : "No dApps connected yet."
+                verified
+                  ? t("security.recoveryVerified")
+                  : t("security.recoveryPending")
               }
-              value={securityState.connectedSitesCount > 0 ? String(securityState.connectedSitesCount) : "None"}
-              valueColor={
-                securityState.connectedSitesCount > 0
-                  ? "var(--text-secondary, #777777)"
-                  : getStatusColor("secure")
+              aside={
+                <Pill tone={verified ? "secure" : "warn"}>
+                  {verified ? t("security.verified") : t("security.actionNeeded")}
+                </Pill>
+              }
+              onClick={() => setShowSeedBackupVerification(true)}
+            />
+          </Section>
+
+          <Section label={t("security.section.privacy")}>
+            <StatusRow
+              icon={<EyeOffIcon />}
+              tone="neutral"
+              title={t("security.hideBalances")}
+              subtitle={
+                hideBalances
+                  ? t("security.hideBalancesOn")
+                  : t("security.hideBalancesOff")
+              }
+              aside={
+                <Toggle
+                  checked={hideBalances}
+                  onClick={() => void toggleHideBalances()}
+                  label={t("security.hideBalancesToggle")}
+                />
+              }
+            />
+
+            <ActionRow
+              icon={<LinkIcon />}
+              tone="neutral"
+              title={t("security.connectedSites")}
+              subtitle={t("security.connectedSitesSub")}
+              aside={
+                <>
+                  <Pill tone="neutral">{connectedCount}</Pill>
+                  <Chevron />
+                </>
               }
               onClick={() => setShowConnectedSites(true)}
             />
+          </Section>
+        </div>
 
-
-          </div>
-
-        </section>
-
-        <section style={styles.section}>
-          <SectionLabel>Security tips</SectionLabel>
-
-          <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-            {(
-              [
-                "Verify your seed phrase backup by selecting random words to confirm you wrote them down correctly.",
-                "Review connected sites regularly and disconnect any you no longer use.",
-              ] as const
-            ).map((tip, i) => (
-              <div
-                key={i}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 12,
-                  background: "var(--bg-sunken, #f7f7f4)",
-                  fontSize: 12,
-                  lineHeight: "18px",
-                  color: "var(--text-secondary, #666666)",
-                }}
-              >
-                {tip}
+        {onClearWallet ? (
+          <section className="set-danger" ref={dangerRef}>
+            <div className="set-danger__head">
+              <div className="set-danger__title">{t("security.dangerZone")}</div>
+              <div className="set-danger__desc">
+                {t("security.dangerZoneDesc")}
               </div>
-            ))}
-          </div>
-        </section>
-      </section>
+            </div>
+
+            <button
+              type="button"
+              className="set-danger__row"
+              onClick={() => setConfirmClear(true)}
+            >
+              <span className="set-row__icon set-row__icon--danger">
+                <TrashIcon />
+              </span>
+
+              <span className="set-row__body">
+                <span className="set-row__title">{t("security.clearWallet")}</span>
+                <span className="set-row__sub">
+                  {t("security.clearWalletSub")}
+                </span>
+              </span>
+
+              <span className="set-row__aside">
+                <Chevron />
+              </span>
+            </button>
+          </section>
+        ) : null}
+      </div>
 
       {isAutoLockSheetOpen ? (
         <div
@@ -846,7 +862,7 @@ export default function SecurityCenterPage({
           <section
             role="dialog"
             aria-modal="true"
-            aria-label="Auto-lock options"
+            aria-label={t("security.autoLockOptions")}
             onClick={(event) => event.stopPropagation()}
             style={{
               width: "100%",
@@ -883,7 +899,7 @@ export default function SecurityCenterPage({
                       letterSpacing: "-0.02em",
                     }}
                   >
-                    Auto-lock
+                    {t("security.autoLock")}
                   </div>
 
                   <div
@@ -894,13 +910,13 @@ export default function SecurityCenterPage({
                       lineHeight: "19px",
                     }}
                   >
-                    Choose when SIMPLE locks after inactivity.
+                    {t("security.autoLockDesc")}
                   </div>
                 </div>
 
                 <button
                   type="button"
-                  aria-label="Close auto-lock options"
+                  aria-label={t("security.closeAutoLock")}
                   onClick={() => setIsAutoLockSheetOpen(false)}
                   style={{
                     width: 36,
@@ -919,26 +935,37 @@ export default function SecurityCenterPage({
                 </button>
               </div>
 
-              <div className="row-list">
+              <div className="set-card">
                 {AUTO_LOCK_OPTIONS.map((minutes) => {
                   const selected = securityState.autoLockMinutes === minutes;
 
                   return (
-                    <Row
+                    <button
                       key={minutes}
-                      instrument="security"
-                      title={`${minutes} min`}
-                      subtitle={
-                        minutes <= 5
-                          ? "Best for maximum protection."
-                          : minutes <= 15
-                            ? "Recommended for everyday use."
-                            : "More convenient, less strict."
-                      }
-                      value={selected ? "Selected" : "›"}
-                      valueColor={selected ? getStatusColor("secure") : undefined}
-                      onClick={() => applyAutoLock(minutes)}
-                    />
+                      type="button"
+                      className="set-row"
+                      onClick={() => void applyAutoLock(minutes)}
+                    >
+                      <span className="set-row__body">
+                        <span className="set-row__title">
+                          {t("common.minutesShort", { minutes })}
+                        </span>
+                        <span className="set-row__sub">
+                          {minutes <= 5
+                            ? t("security.autoLockTipHigh")
+                            : minutes <= 15
+                              ? t("security.autoLockTipMedium")
+                              : t("security.autoLockTipLow")}
+                        </span>
+                      </span>
+                      <span className="set-row__aside">
+                        {selected ? (
+                          <Pill tone="secure">{t("common.selected")}</Pill>
+                        ) : (
+                          <Chevron />
+                        )}
+                      </span>
+                    </button>
                   );
                 })}
               </div>
@@ -949,14 +976,100 @@ export default function SecurityCenterPage({
                 onClick={() => setIsAutoLockSheetOpen(false)}
                 style={{ marginTop: 12 }}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </div>
           </section>
         </div>
       ) : null}
 
+      {confirmClear ? (
+        <div
+          role="presentation"
+          onClick={() => setConfirmClear(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            display: "grid",
+            alignItems: "end",
+            background: "rgba(0, 0, 0, 0.24)",
+            padding: "0 0 16px",
+            boxSizing: "border-box",
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("security.clearConfirmLabel")}
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 680,
+              margin: "0 auto",
+              padding: "0 12px",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                border: "1px solid var(--border, #dedede)",
+                borderRadius: 24,
+                background: "var(--bg, #ffffff)",
+                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.18)",
+                padding: 18,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 18,
+                  lineHeight: "24px",
+                  fontWeight: 850,
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                {t("security.clearConfirmTitle")}
+              </div>
 
-    </main>
+              <p
+                style={{
+                  margin: "8px 0 0",
+                  color: "var(--text-secondary, #777777)",
+                  fontSize: 13,
+                  lineHeight: "19px",
+                }}
+              >
+                {t("security.clearConfirmBody")}
+              </p>
+
+              <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
+                <button
+                  type="button"
+                  className="btn primary lg full"
+                  onClick={() => {
+                    setConfirmClear(false);
+                    void onClearWallet?.();
+                  }}
+                  style={{
+                    background: "var(--danger)",
+                    borderColor: "var(--danger)",
+                  }}
+                >
+                  {t("security.clearWallet")}
+                </button>
+
+                <button
+                  type="button"
+                  className="btn secondary lg full"
+                  onClick={() => setConfirmClear(false)}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </div>
   );
 }

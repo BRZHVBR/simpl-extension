@@ -1,15 +1,17 @@
-import {
-  BASE_CHAIN_ID,
-  BNB_SMART_CHAIN_ID,
-  ETHEREUM_MAINNET_CHAIN_ID,
-  SEPOLIA_CHAIN_ID,
-} from "../networks/chain-registry";
+import { getNativeCoinId, priceDebug, priceWarn } from "./price-identity";
+import { getSpotPrice } from "./simpl-market-api.service";
+import { isTonChainId } from "../networks/chain-registry";
+import { getRequiredTonConfigByChainId } from "../../chains/ton/ton.config";
+import { getTonNativeSpot } from "../../chains/ton/ton.prices";
 
 export type NativeAssetQuote = {
   chainId: number;
   symbol: string;
   priceUsd: number;
-  priceEur: number;
+  // EUR comes from the gateway (`vs=eur`) and is normally present. It stays
+  // optional so a transient EUR failure degrades to "no rate" instead of
+  // assuming USD parity — consumers must treat a missing EUR as "no EUR rate".
+  priceEur?: number;
   updatedAt: number;
 };
 
@@ -17,22 +19,6 @@ const CACHE_TTL_MS = 60_000;
 
 function getNativePriceCacheKey(chainId: number): string {
   return `simple:nativePrice:${chainId}`;
-}
-
-function getCoinGeckoIdByChainId(chainId: number): string | null {
-  if (
-    chainId === ETHEREUM_MAINNET_CHAIN_ID ||
-    chainId === BASE_CHAIN_ID ||
-    chainId === SEPOLIA_CHAIN_ID
-  ) {
-    return "ethereum";
-  }
-
-  if (chainId === BNB_SMART_CHAIN_ID) {
-    return "binancecoin";
-  }
-
-  return null;
 }
 
 function readCachedQuote(chainId: number): NativeAssetQuote | null {
@@ -52,7 +38,6 @@ function readCachedQuote(chainId: number): NativeAssetQuote | null {
       parsed.chainId !== chainId ||
       typeof parsed.symbol !== "string" ||
       typeof parsed.priceUsd !== "number" ||
-      typeof parsed.priceEur !== "number" ||
       typeof parsed.updatedAt !== "number"
     ) {
       return null;
@@ -92,9 +77,13 @@ export class NativePriceService {
     chainId: number;
     symbol: string;
   }): Promise<NativeAssetQuote | null> {
-    const coinId = getCoinGeckoIdByChainId(input.chainId);
+    const coinId = getNativeCoinId(input.chainId);
 
     if (!coinId) {
+      priceWarn("native not found", {
+        chainId: input.chainId,
+        symbol: input.symbol,
+      });
       return null;
     }
 
@@ -104,35 +93,27 @@ export class NativePriceService {
       return cached;
     }
 
-    const url = new URL("https://api.coingecko.com/api/v3/simple/price");
+    // TON is not served by the generic Simpl price gateway ("Unsupported
+    // asset"), so its native price comes from the dedicated Simpl API TON proxy
+    // via getTonNativeSpot. Same cache, same NativeAssetQuote shape.
+    if (isTonChainId(input.chainId)) {
+      return this.getTonNativeQuote(input, cached);
+    }
 
-    url.searchParams.set("ids", coinId);
-    url.searchParams.set("vs_currencies", "usd,eur");
-
+    // Price comes from the Simpl API Gateway (never a provider directly). USD is
+    // authoritative for value math; EUR (`vs=eur`) is fetched alongside it to
+    // derive the global USD→EUR rate used by the EUR valuation toggle. Both go
+    // through the gateway. The two calls are independent: a USD success with an
+    // EUR failure still yields a usable quote (EUR simply omitted → "—").
     try {
-      const response = await fetch(url.toString(), {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-        },
-      });
+      const [usd, eur] = await Promise.all([
+        getSpotPrice({ chainId: input.chainId, address: null, vs: "usd" }),
+        getSpotPrice({ chainId: input.chainId, address: null, vs: "eur" }),
+      ]);
 
-      if (!response.ok) {
-        return cached;
-      }
+      const priceUsd = usd?.price;
 
-      const data = (await response.json()) as Record<
-        string,
-        {
-          usd?: number;
-          eur?: number;
-        }
-      >;
-
-      const priceUsd = data[coinId]?.usd;
-      const priceEur = data[coinId]?.eur;
-
-      if (typeof priceUsd !== "number" || typeof priceEur !== "number") {
+      if (typeof priceUsd !== "number" || !Number.isFinite(priceUsd)) {
         return cached;
       }
 
@@ -140,14 +121,72 @@ export class NativePriceService {
         chainId: input.chainId,
         symbol: input.symbol,
         priceUsd,
-        priceEur,
         updatedAt: Date.now(),
       };
 
+      // Attach EUR when the gateway returned one (the normal case). On a rare
+      // EUR failure it is omitted and the EUR toggle shows "—" rather than a
+      // misleading USD-parity value.
+      if (typeof eur?.price === "number" && Number.isFinite(eur.price)) {
+        quote.priceEur = eur.price;
+      }
+
       writeCachedQuote(quote);
+      priceDebug("native ok", {
+        chainId: input.chainId,
+        coinId,
+        priceUsd,
+        source: usd?.source,
+      });
 
       return quote;
-    } catch {
+    } catch (error) {
+      priceWarn("native error", {
+        chainId: input.chainId,
+        coinId,
+        error: String(error),
+      });
+      return cached;
+    }
+  }
+
+  // TON native quote via the Simpl API proxy (USD authoritative, EUR alongside for the EUR
+  // toggle). Mirrors the gateway path's caching + degradation: a USD success
+  // with an EUR miss still yields a usable quote; total failure keeps cache.
+  private async getTonNativeQuote(
+    input: { chainId: number; symbol: string },
+    cached: NativeAssetQuote | null,
+  ): Promise<NativeAssetQuote | null> {
+    try {
+      const config = getRequiredTonConfigByChainId(input.chainId);
+      const [usd, eur] = await Promise.all([
+        getTonNativeSpot(config, "usd"),
+        getTonNativeSpot(config, "eur"),
+      ]);
+
+      const priceUsd = usd?.price;
+      if (typeof priceUsd !== "number" || !Number.isFinite(priceUsd)) {
+        return cached;
+      }
+
+      const quote: NativeAssetQuote = {
+        chainId: input.chainId,
+        symbol: input.symbol,
+        priceUsd,
+        updatedAt: Date.now(),
+      };
+      if (typeof eur?.price === "number" && Number.isFinite(eur.price)) {
+        quote.priceEur = eur.price;
+      }
+
+      writeCachedQuote(quote);
+      priceDebug("native ok (ton)", { chainId: input.chainId, priceUsd });
+      return quote;
+    } catch (error) {
+      priceWarn("native error (ton)", {
+        chainId: input.chainId,
+        error: String(error),
+      });
       return cached;
     }
   }

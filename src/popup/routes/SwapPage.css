@@ -1,6 +1,419 @@
 /* src/popup/routes/SwapPage.css */
 
 /* ============================================================
+   Chain-aware Swap — section selectors (token pill + chain pill)
+   Each half (From / To) carries a token pill and a compact chain pill in its
+   top row. The SAME structure is used for same-chain and cross-chain swaps so
+   the layout never jumps when the destination chain changes. The chain pill is
+   always the right-most element (predictable top-right position).
+   ============================================================ */
+
+.swap-half-selectors {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+/* Token pill shrinks (symbol ellipsizes) so the chain pill always fits beside
+   it; the chain pill itself stays compact and never collapses. */
+.swap-half-selectors .swap-token-pill {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: none;
+}
+
+/* Compact, rounded chain pill — icon + chain name. Shared by the source pill,
+   the destination pill (DestChainSelect) and the cross-chain panel pills so all
+   chain selectors look identical. */
+.swap-chain-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--ink-1);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 138px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.swap-chain-pill:hover:not(:disabled) {
+  background: var(--line);
+}
+
+.swap-chain-pill:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.swap-chain-pill__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Token icon with a small chain badge in the corner. The network is secondary
+   to the token, so it sits as a compact badge rather than a separate pill. */
+.token-chain-badge {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.token-chain-badge__token {
+  display: block;
+}
+
+.token-chain-badge__chain {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--line);
+  line-height: 0;
+}
+
+/* Unified chain icon (ChainIcon): one shape + fallback for every chain, in the
+   pills and in the picker rows, so a chain looks identical everywhere. */
+.swap-chain-icon {
+  border-radius: 999px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+}
+
+.swap-chain-icon--fallback {
+  display: grid;
+  place-items: center;
+  background: var(--line);
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* Compact chain-picker rows + the subtle "Preview only" tag. */
+.swap-chain-row__tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+}
+
+/* Search field + empty state shared by the chain / token picker sheets. */
+.swap-picker-search {
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-muted);
+  font-size: 13px;
+  color: var(--ink-1);
+  outline: none;
+}
+
+.swap-picker-search:focus {
+  border-color: var(--ink-3);
+}
+
+.swap-picker-empty {
+  padding: 18px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* Cross-chain token picker — network filter chips, group labels, muted chain. */
+/* Wrapper provides a subtle right-edge fade hinting the row scrolls horizontally
+   as more networks are added (Ethereum / BNB / Base / Solana / TRON / …). */
+.cc-filter-wrap {
+  position: relative;
+}
+
+.cc-filter-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0),
+    var(--bg-canvas)
+  );
+}
+
+.cc-filter-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.cc-filter-row::-webkit-scrollbar {
+  display: none;
+}
+
+.cc-filter-row .swap-percent-chip {
+  flex-shrink: 0;
+}
+
+.cc-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 6px 2px 2px;
+}
+
+.cc-token-chain {
+  color: var(--ink-3);
+}
+
+/* ============================================================
+   CROSS-CHAIN TOKEN PICKER — full wallet screen (not a modal)
+   Occupies the wallet card via absolute inset:0 inside .ext-popup
+   (position: relative). No backdrop, no blur, no sheet. Same shell
+   as the review / status pages; correct in popup + sidepanel + fullscreen.
+   ============================================================ */
+.swap-token-picker-page {
+  position: absolute;
+  inset: 0;
+  z-index: 42;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  overflow: hidden;
+}
+
+/* Search + filter chips stay pinned while the token list scrolls. */
+.cc-picker-sticky {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--line);
+}
+
+.cc-picker-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 16px;
+}
+
+/* Real pills — consistent height, padding, radius and selected state. They
+   never wrap; the row scrolls horizontally instead. */
+.cc-chip {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.cc-chip:hover {
+  border-color: rgba(93, 143, 63, 0.4);
+}
+
+.cc-chip--active {
+  border-color: rgba(93, 143, 63, 0.5);
+  background: rgba(93, 143, 63, 0.1);
+  color: #4f7f35;
+  font-weight: 700;
+}
+
+.cc-chip:focus {
+  outline: none;
+}
+
+.cc-chip:focus-visible {
+  outline: 2px solid rgba(93, 143, 63, 0.55);
+  outline-offset: 1px;
+}
+
+/* Compact network filter selector (replaces the clipping chip row). A single
+   full-width rounded button that opens a small dropdown of network options. */
+.cc-filter-select {
+  position: relative;
+}
+
+.cc-filter-trigger {
+  width: 100%;
+  height: 38px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.cc-filter-trigger:hover {
+  border-color: rgba(93, 143, 63, 0.4);
+}
+
+.cc-filter-trigger__label {
+  color: var(--ink-3);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-filter-trigger__label strong {
+  color: var(--ink-1);
+  font-weight: 700;
+}
+
+.cc-filter-trigger__chevron {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.cc-filter-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 248px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.cc-filter-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.cc-filter-option:hover {
+  background: rgba(var(--ink-rgb), 0.04);
+}
+
+.cc-filter-option--active {
+  color: #4f7f35;
+  background: rgba(93, 143, 63, 0.1);
+  font-weight: 700;
+}
+
+.cc-filter-check {
+  flex: 0 0 auto;
+  color: #4f7f35;
+  font-weight: 700;
+}
+
+/* Chain picker: a touch tighter than the token sheet so a short list never
+   leaves a big empty area. */
+.swap-chain-modal {
+  max-height: 70vh;
+}
+
+.swap-chain-modal .swap-token-list-item {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+/* Cross-chain helper copy under the pair card — calm, secondary, shown only on
+   cross-chain routes (different source/destination chains). */
+.swap-cross-helper {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink-3);
+  padding: 2px 4px;
+}
+
+/* Preview-only notice: a quote exists but execution isn't supported yet. */
+.swap-preview-note {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--simple-color-swap-fg);
+  background: var(--simple-color-swap-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+
+/* Warning notice: a calm amber caution (e.g. high fees on a small-amount route).
+   Informational — it never blocks the action. */
+.swap-warning-note {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+
+/* ============================================================
    PAGE HEADER (uses shared bar-top + icbtn from design kit)
    ============================================================ */
 
@@ -10,17 +423,54 @@
   text-align: center;
 }
 
+/* Balances the left back button so the shared SwapHeader title stays centered
+   when there's no right-side control (cross-chain / Solana modes). */
+.swap-header-spacer {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+/* Title doubles as the network selector trigger — reset button chrome. */
+.swap-page-title--button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  padding: 2px 0;
+  border-radius: 10px;
+  transition: background 120ms ease;
+}
+
+.swap-page-title--button:hover {
+  background: rgba(var(--ink-rgb), 0.03);
+}
+
+.swap-page-title__network {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.swap-page-title__chevron {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--ink-3);
+}
+
 .swap-page-title__name {
   font-size: 14px;
   font-weight: 700;
-  color: var(--ink-1, #111111);
+  color: var(--ink-1);
   letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
 .swap-page-title__network {
   font-size: 11px;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   margin-top: 1px;
 }
 
@@ -29,15 +479,31 @@
    ============================================================ */
 
 .swap-pair-card {
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 24px;
-  background: var(--bg-surface, #ffffff);
+  background: var(--bg-surface);
   box-shadow: 0 4px 20px rgba(17, 17, 17, 0.04);
-  overflow: hidden;
+  /* visible so the To amount is never clipped by the card edge */
+  overflow: visible;
 }
 
 .swap-half {
-  padding: 14px 14px 12px;
+  box-sizing: border-box;
+  min-height: 132px;
+  padding: 14px 16px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* FROM holds the percent chips, so it needs more room and clear bottom
+   spacing so the centered switch button never overlaps the chips. */
+.swap-half--from {
+  min-height: 152px;
+  padding-bottom: 20px;
+}
+
+.swap-half--to {
+  min-height: 120px;
 }
 
 .swap-half-top {
@@ -45,37 +511,39 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .swap-half-label {
   font-size: 11px;
   font-weight: 700;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 /* Token selector pill */
 .swap-token-pill {
-  height: 34px;
-  padding: 0 10px 0 5px;
-  border: 1px solid var(--line, #e5e3dc);
+  height: 48px;
+  padding: 0 14px 0 8px;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--bg-muted, #f7f7f4);
-  color: var(--ink-1, #111111);
+  background: var(--bg-muted);
+  color: var(--ink-1);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  font-weight: 700;
+  gap: 8px;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
   cursor: pointer;
   flex-shrink: 0;
+  max-width: 54%;
   transition: background 120ms ease;
 }
 
 .swap-token-pill:hover:not(:disabled) {
-  background: var(--line, #e5e3dc);
+  background: var(--line);
 }
 
 .swap-token-pill:disabled {
@@ -83,76 +551,87 @@
   cursor: not-allowed;
 }
 
+/* AssetIcon inside the pill — never an oversized black circle */
+.swap-token-pill__img {
+  flex-shrink: 0;
+}
+
+.swap-token-pill__sym {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fallback marker when no token is selected yet */
 .swap-token-pill__icon {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: #1c1c1a;
-  color: #ffffff;
+  background: var(--line);
+  color: var(--ink-2);
   display: grid;
   place-items: center;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 800;
   flex-shrink: 0;
 }
 
 .swap-token-pill__chevron {
-  color: var(--ink-3, #6f6f68);
-  font-size: 10px;
-  margin-left: -3px;
+  color: var(--ink-3);
+  font-size: 11px;
+  margin-left: -2px;
+  flex-shrink: 0;
 }
 
-/* Amount input */
-.swap-amount-input {
+/* Amount: shared sizing for From input and To display so neither clips.
+   Font size is set inline (length-based); the clamp here is only a fallback.
+   min-height comfortably exceeds the largest line box, so overflow:hidden
+   only ever trims horizontally (ellipsis) — never the bottom of the digits. */
+.swap-amount-input,
+.swap-estimated-display {
   display: block;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--ink-1, #111111);
-  /* Shrink font for long values so layout never breaks */
-  font-size: clamp(18px, 7vw, 36px);
-  line-height: 1;
+  margin: 12px 0 0;
+  padding: 2px 0;
+  min-height: 46px;
+  color: var(--ink-1);
+  font-size: clamp(20px, 8vw, 40px);
+  line-height: 1.1;
   font-weight: 700;
   letter-spacing: -0.04em;
-  padding: 0;
-  margin-bottom: 8px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.swap-amount-input::placeholder {
-  color: #c5c3bc;
+.swap-amount-input {
+  border: none;
+  outline: none;
+  background: transparent;
 }
 
-/* Estimated receive output */
-.swap-estimated-display {
-  font-size: 36px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  color: var(--ink-1, #111111);
-  margin-bottom: 8px;
-  min-height: 36px;
-  display: flex;
-  align-items: center;
+.swap-amount-input::placeholder {
+  color: var(--ink-4);
 }
 
 .swap-estimated-display--muted {
-  color: var(--ink-3, #6f6f68);
-  font-size: 24px;
+  color: var(--ink-3);
   font-weight: 500;
   letter-spacing: -0.02em;
 }
 
-/* Balance row */
+/* Balance row — pinned to the bottom of the flex-column half */
 .swap-half-bottom {
+  margin-top: auto;
+  padding-top: 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -164,19 +643,28 @@
   flex-shrink: 0;
 }
 
-/* MAX pill */
-.swap-max-pill {
-  height: 20px;
-  padding: 0 7px;
-  border: 1px solid rgba(93, 143, 63, 0.25);
-  border-radius: 999px;
-  background: rgba(93, 143, 63, 0.08);
-  color: #4f7f35;
-  font-size: 10px;
-  font-weight: 800;
-  cursor: pointer;
-  letter-spacing: 0.04em;
+.swap-half-bottom__bal {
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Custom percent + MAX, inside the FROM section under the balance row.
+   Right-aligned so [✎] [MAX] sit under the right-aligned balance. */
+.swap-from-chips {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* MAX pill — aligned with the custom chip, subtle green styling. */
+.swap-max-pill {
+  padding: 0 10px;
+  border-color: rgba(93, 143, 63, 0.5) !important;
+  background: rgba(93, 143, 63, 0.08) !important;
+  color: #4f7f35 !important;
+  letter-spacing: 0.04em;
 }
 
 .swap-max-pill:disabled {
@@ -188,7 +676,7 @@
 .swap-divider {
   position: relative;
   height: 1px;
-  background: var(--line, #e5e3dc);
+  background: var(--line);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -197,12 +685,15 @@
 
 .swap-switch-btn {
   position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   width: 32px;
   height: 32px;
-  border: 3px solid var(--bg-surface, #ffffff);
+  border: 3px solid var(--bg-surface);
   border-radius: 11px;
-  background: var(--bg-muted, #f7f7f4);
-  color: var(--ink-1, #111111);
+  background: var(--bg-muted);
+  color: var(--ink-1);
   cursor: pointer;
   font-size: 13px;
   display: grid;
@@ -213,7 +704,7 @@
 }
 
 .swap-switch-btn:hover:not(:disabled) {
-  background: var(--line, #e5e3dc);
+  background: var(--line);
 }
 
 .swap-switch-btn:disabled {
@@ -222,17 +713,132 @@
 }
 
 /* ============================================================
+   SPEND-PERCENTAGE CHIPS — compact, inside the FROM section
+   ============================================================ */
+
+.swap-percent-chip {
+  flex: 0 0 auto;
+  min-width: 42px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.swap-percent-chip:hover:not(:disabled) {
+  border-color: rgba(93, 143, 63, 0.4);
+}
+
+.swap-percent-chip--active {
+  border-color: rgba(93, 143, 63, 0.5);
+  background: rgba(93, 143, 63, 0.1);
+  color: #4f7f35;
+}
+
+.swap-percent-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* No blue ring on click; keep an accessible ring for keyboard focus only. */
+.swap-percent-chip:focus {
+  outline: none;
+}
+
+.swap-percent-chip:focus-visible {
+  outline: 2px solid rgba(93, 143, 63, 0.55);
+  outline-offset: 1px;
+}
+
+/* Pencil / applied custom-percent chip */
+.swap-percent-chip--custom {
+  min-width: 38px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+/* Inline custom-percent editor — same pill footprint, holds input + % + ✓ */
+.swap-percent-chip--edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 64px;
+  padding: 0 6px 0 10px;
+  cursor: text;
+  border-color: rgba(93, 143, 63, 0.55);
+  background: rgba(93, 143, 63, 0.08);
+}
+
+.swap-percent-chip--edit.swap-percent-chip--invalid {
+  border-color: rgba(168, 57, 57, 0.6);
+  background: rgba(168, 57, 57, 0.07);
+}
+
+.swap-percent-chip__input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-1);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.swap-percent-chip__input:focus {
+  outline: none;
+}
+
+.swap-percent-chip__suffix {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-3);
+}
+
+.swap-percent-chip__apply {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #4f7f35;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.swap-percent-chip--invalid .swap-percent-chip__apply {
+  color: var(--danger);
+}
+
+/* Target-receive (buy mode) FROM/TO input accent */
+.swap-amount-input--target {
+  color: var(--ink-1);
+}
+
+/* ============================================================
    QUOTE DETAILS CARD
    ============================================================ */
 
 .swap-quote-card {
-  border: 1px solid var(--line, #e5e3dc);
+  margin-top: 6px;
+  border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--bg-surface, #ffffff);
-  padding: 10px 14px;
+  background: var(--bg-surface);
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 4px;
 }
 
 .swap-quote-row {
@@ -240,22 +846,57 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  font-size: 12px;
+  min-height: 30px;
+  font-size: 14px;
   line-height: 1.3;
 }
 
 .swap-quote-row span {
-  color: var(--ink-3, #6f6f68);
+  flex: 0 0 auto;
+  color: var(--ink-3);
 }
 
 .swap-quote-row strong {
-  color: var(--ink-1, #111111);
-  font-weight: 650;
+  flex: 1 1 auto;
+  color: var(--ink-1);
+  font-size: 15px;
+  font-weight: 700;
   text-align: right;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Solana swap fee transparency — subtle inline tag + helper line. Scoped to
+   new class names so EVM swap styling is untouched. */
+.swap-fee-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+  letter-spacing: 0.01em;
+}
+
+.swap-fee-tag--ok {
+  background: rgba(93, 143, 63, 0.12);
+  color: #4f7f35;
+}
+
+.swap-fee-tag--warn {
+  background: rgba(176, 124, 30, 0.12);
+  color: var(--warn);
+}
+
+.swap-fee-hint {
+  margin-top: -2px;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
 }
 
 /* ============================================================
@@ -267,79 +908,52 @@
   border-radius: 14px;
   background: rgba(93, 143, 63, 0.07);
   color: #4f7f35;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.45;
+  padding: 11px 14px;
+  font-size: 14px;
+  line-height: 1.4;
 }
 
 .swap-error {
   border: 1px solid var(--danger-soft, rgba(190, 48, 48, 0.25));
   border-radius: 14px;
   background: var(--danger-soft, rgba(190, 48, 48, 0.08));
-  color: var(--danger, #be3030);
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.45;
+  color: var(--danger);
+  padding: 11px 14px;
+  font-size: 14px;
+  line-height: 1.4;
+  /* Stay compact even if an unexpectedly long string slips through: wrap hard,
+     clamp height with internal scroll, and never blow up the review layout. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+/* Summary card and preview notice must never exceed the wallet surface. */
+.swap-quote-card,
+.swap-preview-note,
+.swap-cross-helper {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* ============================================================
-   CTA — inside scrollable area, no fixed overlay
+   REVIEW CTA — last block in the normal flex flow (no sticky /
+   fixed footer), so it never overlays the notice or details.
    ============================================================ */
 
-.swap-actions {
-  margin-top: auto;
-  padding-top: 4px;
-  padding-bottom: 4px;
+.swap-review-cta {
+  flex: 0 0 auto;
+}
+
+.swap-review-cta .btn {
+  height: 52px;
 }
 
 /* ============================================================
    MODALS — unchanged logic, shared bottom-sheet style
    ============================================================ */
-
-.swap-token-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  background: rgba(17, 17, 17, 0.2);
-  backdrop-filter: blur(8px);
-}
-
-.swap-token-modal {
-  width: min(100%, 460px);
-  max-height: 78vh;
-  box-sizing: border-box;
-  border: 1px solid var(--line, #e5e3dc);
-  border-radius: 26px 26px 0 0;
-  background: var(--bg-surface, #ffffff);
-  box-shadow: 0 -18px 50px rgba(17, 17, 17, 0.14);
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.swap-token-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.swap-token-modal-header h2 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.2;
-  letter-spacing: -0.03em;
-}
-
-.swap-token-modal-header p {
-  margin: 4px 0 0;
-  color: var(--ink-3, #6f6f68);
-  font-size: 12px;
-}
 
 .swap-token-list {
   overflow: auto;
@@ -353,8 +967,8 @@
   width: 32px;
   height: 32px;
   border-radius: 999px;
-  background: #1c1c1a;
-  color: #ffffff;
+  background: var(--ink-1);
+  color: var(--bg-surface);
   display: grid;
   place-items: center;
   font-size: 13px;
@@ -364,10 +978,10 @@
 
 .swap-token-list-item {
   width: 100%;
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--bg-muted, #f7f7f4);
-  color: var(--ink-1, #111111);
+  background: var(--bg-muted);
+  color: var(--ink-1);
   padding: 10px;
   display: grid;
   grid-template-columns: 34px 1fr auto;
@@ -390,7 +1004,7 @@
 }
 
 .swap-token-list-body span {
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   font-size: 12px;
   line-height: 1.25;
   overflow: hidden;
@@ -399,16 +1013,16 @@
 }
 
 .swap-token-list-balance {
-  color: var(--ink-2, #333333);
+  color: var(--ink-2);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
 }
 
 .swap-empty-state {
-  border: 1px dashed var(--line, #e5e3dc);
+  border: 1px dashed var(--line);
   border-radius: 18px;
   padding: 18px;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   font-size: 13px;
   text-align: center;
 }
@@ -428,9 +1042,9 @@
 }
 
 .swap-review-main > div {
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--bg-muted, #f7f7f4);
+  background: var(--bg-muted);
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -438,19 +1052,19 @@
 }
 
 .swap-review-main span {
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   font-size: 12px;
 }
 
 .swap-review-main strong {
-  color: var(--ink-1, #111111);
+  color: var(--ink-1);
   font-size: 22px;
   line-height: 1.15;
   letter-spacing: -0.04em;
 }
 
 .swap-review-details {
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 18px;
   padding: 12px;
   display: flex;
@@ -462,13 +1076,13 @@
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   font-size: 13px;
   line-height: 1.4;
 }
 
 .swap-details-row strong {
-  color: var(--ink-1, #111111);
+  color: var(--ink-1);
   font-weight: 650;
 }
 
@@ -531,237 +1145,248 @@
   height: 46px;
   border: none;
   border-radius: 14px;
-  background: #111111;
-  color: #ffffff;
+  background: var(--ink-1);
+  color: var(--bg-surface);
   font-size: 14px;
   font-weight: 760;
   cursor: pointer;
   flex-shrink: 0;
 }
 
-.swap-review-button:hover:not(:disabled) { background: #2a2920; }
+.swap-review-button:hover:not(:disabled) { background: var(--ink-2); }
 .swap-review-button:disabled { cursor: not-allowed; opacity: 0.42; }
 
 /* Settings */
+/* ============================================================
+   Swap settings modal — aligned with the simpl design system
+   (rounded surface card, black/white active states, soft shadow).
+   Bottom sheet in popup/sidepanel; centered card in fullscreen.
+   ============================================================ */
+
+.swap-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* Clean scrim — gentle darken, only a hint of blur (not "soapy"). */
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+.swap-settings-modal {
+  width: 100%;
+  max-width: 460px;
+  box-sizing: border-box;
+  max-height: 86vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 24px 24px 0 0;
+  background: var(--bg-surface);
+  box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.28);
+  padding: 18px 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Fullscreen surface: center the card so it does not stick to the very bottom
+   of a large viewport, and keep it comfortably sized. */
+html[data-simple-surface="fullscreen"] .swap-settings-backdrop {
+  align-items: center;
+  padding: 24px;
+}
+
+html[data-simple-surface="fullscreen"] .swap-settings-modal {
+  max-width: 440px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  max-height: min(88vh, 620px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+
+.swap-settings-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.swap-settings-modal__heading { min-width: 0; }
+
+.swap-settings-modal__title {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.2;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  color: var(--ink-1);
+}
+
+.swap-settings-modal__subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.swap-settings-modal__close { flex: 0 0 auto; }
+
 .swap-settings-section {
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
-.swap-settings-label {
+.swap-settings-row {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
   align-items: baseline;
+  gap: 12px;
 }
 
-.swap-settings-label strong { font-size: 14px; color: var(--ink-1, #111111); }
-.swap-settings-label span { font-size: 12px; color: var(--ink-3, #6f6f68); }
+.swap-settings-row__label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-1);
+}
 
-.swap-slippage-grid {
+.swap-settings-row__current {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.swap-slippage-presets {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
-.swap-slippage-grid button,
-.swap-custom-slippage button {
+.swap-slippage-preset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   height: 42px;
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--bg-muted, #f7f7f4);
-  color: var(--ink-1, #111111);
-  font-weight: 750;
-  cursor: pointer;
+  background: var(--bg-surface);
+  color: var(--ink-1);
   font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
 }
 
-.swap-slippage-grid button.active {
-  border-color: rgba(93, 143, 63, 0.35);
-  background: rgba(93, 143, 63, 0.1);
-  color: #4f7f35;
+.swap-slippage-preset:hover {
+  background: rgba(var(--ink-rgb), 0.04);
 }
 
-.swap-custom-slippage {
-  display: grid;
-  grid-template-columns: 1fr 96px;
+.swap-slippage-preset:focus-visible {
+  outline: 2px solid var(--ink-1);
+  outline-offset: -2px;
+}
+
+/* Selected preset — black/white active state (no accent color). */
+.swap-slippage-preset--active {
+  border-color: var(--ink-1);
+  background: rgba(var(--ink-rgb), 0.06);
+}
+
+.swap-slippage-preset__check { color: var(--ink-1); }
+
+.swap-settings-custom {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
-.swap-custom-slippage input {
-  height: 42px;
+.swap-settings-custom__label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Input + Apply on one row; Apply wraps below on very narrow widths. */
+.swap-settings-custom__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.swap-settings-custom__field {
+  flex: 1 1 160px;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
   box-sizing: border-box;
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--bg-surface, #ffffff);
-  color: var(--ink-1, #111111);
-  padding: 0 12px;
-  font-size: 14px;
-  outline: none;
+  background: var(--bg-sunken);
+  padding: 0 14px;
+  transition: border-color 100ms ease;
+}
+
+.swap-settings-custom__field:focus-within { border-color: var(--ink-1); }
+
+.swap-settings-custom__field--error,
+.swap-settings-custom__field--error:focus-within {
+  border-color: var(--danger);
+}
+
+.swap-settings-custom__field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-1);
   font-family: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  outline: none;
+}
+
+.swap-settings-custom__suffix {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink-3);
+}
+
+.swap-settings-custom__apply {
+  flex: 0 0 auto;
+  height: 44px;
+  min-width: 96px;
+  padding: 0 18px;
+}
+
+.swap-settings-error {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+.swap-settings-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
 }
 
 .swap-warning {
   border: 1px solid rgba(190, 130, 40, 0.25);
-  border-radius: 16px;
-  background: rgba(190, 130, 40, 0.08);
-  color: #8a5a13;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-/* ============================================================
-   SUBMITTED SWAP MODAL
-   ============================================================ */
-
-.swap-submitted-modal { gap: 16px; }
-
-.swap-submitted-status-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line, #e5e3dc);
-  border-radius: 20px;
-  background: rgba(93, 143, 63, 0.08);
-}
-
-.swap-submitted-status-card strong {
-  display: block;
-  color: var(--ink-1, #111111);
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.swap-submitted-status-card p {
-  margin: 4px 0 0;
-  color: var(--ink-3, #6f6f68);
-  font-size: 13px;
-}
-
-.swap-submitted-status-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  border-radius: 999px;
-  background: #5d8f3f;
-  color: #ffffff;
-  font-size: 20px;
-  font-weight: 800;
-}
-
-.swap-submitted-modal .swap-review-details {
-  display: grid;
-  gap: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--line, #e5e3dc);
-  border-radius: 20px;
-  background: var(--bg-surface, #ffffff);
-}
-
-.swap-submitted-modal .swap-review-row {
-  display: grid;
-  grid-template-columns: minmax(100px, 0.8fr) minmax(0, 1.2fr);
-  align-items: center;
-  gap: 12px;
-  min-height: 34px;
-  padding: 4px 0;
-}
-
-.swap-submitted-modal .swap-review-row + .swap-review-row {
-  border-top: 1px solid rgba(17, 17, 17, 0.06);
-}
-
-.swap-submitted-modal .swap-review-row span {
-  color: var(--ink-3, #6f6f68);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.swap-submitted-modal .swap-review-row strong {
-  min-width: 0;
-  color: var(--ink-1, #111111);
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.35;
-  text-align: right;
-  word-break: break-word;
-}
-
-.swap-submitted-modal .swap-review-row:nth-child(3) strong {
-  display: inline-flex;
-  justify-self: end;
-  align-items: center;
-  min-height: 24px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: rgba(93, 143, 63, 0.1);
-  color: #5d8f3f;
-  font-size: 12px;
-}
-
-.swap-submitted-modal .swap-submitted-actions { margin-top: 2px; }
-
-.swap-submitted-hash {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  letter-spacing: -0.02em;
-}
-
-.swap-submitted-actions { display: grid; gap: 10px; }
-
-.swap-secondary-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 46px;
-  padding: 0 16px;
-  border: 1px solid var(--line, #e5e3dc);
   border-radius: 14px;
-  background: var(--bg-surface, #ffffff);
-  color: var(--ink-1, #111111);
+  background: rgba(190, 130, 40, 0.08);
+  color: var(--warn);
+  padding: 11px 14px;
   font-size: 14px;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.swap-secondary-action:hover { background: rgba(17, 17, 17, 0.04); }
-
-.swap-submitted-error {
-  padding: 12px 14px;
-  border: 1px solid rgba(168, 57, 57, 0.22);
-  border-radius: 16px;
-  background: rgba(168, 57, 57, 0.06);
-  color: #8b2f2f;
-  font-size: 13px;
   line-height: 1.4;
 }
-
-.swap-submitted-status-badge {
-  display: inline-flex;
-  justify-self: end;
-  align-items: center;
-  min-height: 24px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 12px;
-}
-
-.swap-submitted-status-badge--pending { background: rgba(93, 143, 63, 0.1); color: #5d8f3f; }
-.swap-submitted-status-badge--confirmed { background: rgba(93, 143, 63, 0.14); color: #5d8f3f; }
-.swap-submitted-status-badge--failed { background: rgba(168, 57, 57, 0.1); color: #8b2f2f; }
-
-.swap-submitted-status-card--confirmed { background: rgba(93, 143, 63, 0.1); }
-.swap-submitted-status-card--confirmed .swap-submitted-status-icon { background: #5d8f3f; }
-.swap-submitted-status-card--failed { background: rgba(168, 57, 57, 0.08); }
-.swap-submitted-status-card--failed .swap-submitted-status-icon { background: #a83939; }
 
 /* ============================================================
    TOKEN PICKER — search + sections + import
@@ -776,10 +1401,10 @@
   width: 100%;
   box-sizing: border-box;
   height: 42px;
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--bg-muted, #f7f7f4);
-  color: var(--ink-1, #111111);
+  background: var(--bg-muted);
+  color: var(--ink-1);
   padding: 0 14px;
   font-size: 14px;
   font-family: inherit;
@@ -787,12 +1412,12 @@
 }
 
 .swap-picker-search input:focus {
-  border-color: rgba(17, 17, 17, 0.3);
-  background: var(--bg-surface, #ffffff);
+  border-color: rgba(var(--ink-rgb), 0.3);
+  background: var(--bg-surface);
 }
 
 .swap-picker-search input::placeholder {
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
 }
 
 .swap-token-section-label {
@@ -801,16 +1426,16 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
 }
 
 /* Import trigger row — same visual as token-list-item */
 .swap-token-import-trigger {
   width: 100%;
-  border: 1px dashed var(--line, #e5e3dc);
+  border: 1px dashed var(--line);
   border-radius: 18px;
-  background: var(--bg-muted, #f7f7f4);
-  color: var(--ink-1, #111111);
+  background: var(--bg-muted);
+  color: var(--ink-1);
   padding: 10px;
   display: grid;
   grid-template-columns: 34px 1fr;
@@ -821,7 +1446,7 @@
 }
 
 .swap-token-import-trigger:hover {
-  background: var(--line, #e5e3dc);
+  background: var(--line);
 }
 
 /* Import preview panel */
@@ -837,9 +1462,9 @@
   grid-template-columns: 34px 1fr;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--line, #e5e3dc);
+  border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--bg-muted, #f7f7f4);
+  background: var(--bg-muted);
   padding: 12px 10px;
 }
 
@@ -847,7 +1472,7 @@
   appearance: none;
   background: transparent;
   border: none;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
@@ -855,11 +1480,11 @@
   text-align: left;
 }
 
-.swap-picker-back-btn:hover { color: var(--ink-1, #111111); }
+.swap-picker-back-btn:hover { color: var(--ink-1); }
 
 .swap-import-error-hint {
   font-size: 12px;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   line-height: 1.5;
   padding: 0 2px;
 }
@@ -868,20 +1493,20 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  background: var(--bg-tint, #f5f4ef);
-  border: 1px solid var(--line, #e5e3dc);
+  background: var(--bg-tint);
+  border: 1px solid var(--line);
   border-radius: 10px;
   padding: 8px 12px;
   font-size: 13px;
-  color: var(--ink-1, #111111);
+  color: var(--ink-1);
   cursor: pointer;
   text-align: left;
   width: 100%;
 }
 
 .swap-import-did-you-mean:hover {
-  background: var(--bg-surface, #ffffff);
-  border-color: var(--ink-3, #6f6f68);
+  background: var(--bg-surface);
+  border-color: var(--ink-3);
 }
 
 .swap-import-did-you-mean strong {
@@ -898,8 +1523,8 @@
   left: 50%;
   transform: translateX(-50%);
   z-index: 200;
-  background: #111111;
-  color: #ffffff;
+  background: var(--ink-1);
+  color: var(--bg-surface);
   font-size: 13px;
   font-weight: 650;
   padding: 9px 18px;
@@ -915,10 +1540,15 @@
 
 .swap-quote-refresh {
   text-align: center;
-  font-size: 11px;
-  color: var(--ink-3, #6f6f68);
+  font-size: 12px;
+  color: var(--ink-3);
   letter-spacing: 0.01em;
-  margin-top: -4px;
+  margin: 0;
+}
+
+/* AssetIcon inside the token picker list rows */
+.swap-token-list-img {
+  flex-shrink: 0;
 }
 
 /* ============================================================
@@ -928,6 +1558,535 @@
 .swap-review-fee-note {
   margin: -4px 2px 0;
   font-size: 11px;
-  color: var(--ink-3, #6f6f68);
+  color: var(--ink-3);
   line-height: 1.5;
+}
+
+/* ============================================================
+   POPUP COMPACT MODE
+   Everything fits on one 360x600 screen with NO scroll: header
+   (shared .bar-top, 52px) + a non-scrolling .screen-body flex
+   column holding the swap card, quote details, notice, refresh
+   text and the Review button — all in normal flow.
+   Fullscreen / web (larger viewport) keeps the roomier base spacing.
+   ============================================================ */
+@media (max-width: 420px), (max-height: 650px) {
+  /* Non-scrolling content column. Vertical budget (≈586px < 600):
+     header 52 + padding 22 + swap ~248 + quote ~128 + notice ~36
+     + refresh 16 + button 52 + gaps. */
+  .swap-page .screen-body {
+    gap: 7px !important;
+    padding: 10px 22px 12px !important;
+    overflow: hidden !important;
+  }
+
+  /* Swap card ≈ 232px (two ~116px sections) */
+  .swap-page .swap-pair-card {
+    border-radius: 24px;
+  }
+
+  .swap-page .swap-half {
+    min-height: 96px;
+    padding: 8px 18px 6px;
+  }
+
+  /* FROM carries the chips: taller, with bottom clearance for the switch
+     button. TO stays compact. */
+  .swap-page .swap-half--from {
+    min-height: 150px;
+    padding-bottom: 16px;
+  }
+
+  .swap-page .swap-half--to {
+    min-height: 108px;
+  }
+
+  /* Spend chips — compact for the popup budget */
+  .swap-page .swap-from-chips {
+    gap: 5px;
+    margin-top: 6px;
+  }
+
+  .swap-page .swap-percent-chip {
+    height: 24px;
+    min-width: 38px;
+    font-size: 11px;
+    padding: 0 7px;
+  }
+
+  /* Custom pencil chip stays narrow; the editor keeps room for "50% ✓". */
+  .swap-page .swap-percent-chip--custom {
+    min-width: 36px;
+    padding: 0 9px;
+  }
+
+  .swap-page .swap-percent-chip--edit {
+    min-width: 62px;
+    padding: 0 6px 0 9px;
+  }
+
+  /* Amount: smaller caps so long values still fit one line, no clip.
+     min-height (36) exceeds the largest line box (34px × 1.05 ≈ 36). */
+  .swap-page .swap-amount-input,
+  .swap-page .swap-estimated-display {
+    margin-top: 4px;
+    min-height: 36px;
+  }
+
+  .swap-page .swap-half-bottom {
+    padding-top: 6px;
+  }
+
+  /* Token selector pill — compact */
+  .swap-page .swap-token-pill {
+    height: 42px;
+    padding: 0 12px 0 8px;
+    font-size: 20px;
+    border-radius: 22px;
+  }
+
+  /* MAX pill — match the percent chips */
+  .swap-page .swap-max-pill {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  /* Quote details ≈ 120px */
+  .swap-page .swap-quote-card {
+    padding: 10px 16px;
+    gap: 2px;
+  }
+
+  .swap-page .swap-quote-row {
+    min-height: 19px;
+    font-size: 13px;
+  }
+
+  .swap-page .swap-quote-row strong {
+    font-size: 13px;
+  }
+
+  /* Notice ≈ 34px */
+  .swap-page .swap-notice,
+  .swap-page .swap-error,
+  .swap-page .swap-warning {
+    padding: 8px 12px;
+    font-size: 13px;
+    border-radius: 16px;
+  }
+
+  /* Refresh text */
+  .swap-page .swap-quote-refresh {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  /* Review button ≈ 52px, normal flow */
+  .swap-page .swap-review-cta .btn {
+    height: 52px;
+    border-radius: 12px;
+    font-size: 16px;
+  }
+}
+
+
+/* ============================================================
+   REVIEW SWAP — full wallet screen (not a modal)
+   Occupies the wallet card via absolute inset:0 inside .ext-popup
+   (which is position: relative). No backdrop, no blur, no sheet.
+   Works in popup AND fullscreen (overlays the centered card).
+   ============================================================ */
+.swap-review-page {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  overflow: hidden;
+}
+
+.swap-review-page__header {
+  flex: 0 0 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-canvas);
+}
+
+.swap-review-page__titles {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+.swap-review-page__title {
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--ink-1);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.swap-review-page__subtitle {
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.swap-review-page__spacer {
+  flex: 0 0 32px;
+  width: 32px;
+}
+
+.swap-review-page__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 22px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.swap-review-page__footer {
+  flex: 0 0 auto;
+  padding: 10px 22px 14px;
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--line);
+}
+
+.swap-review-confirm {
+  height: 52px !important;
+  border-radius: 13px !important;
+  font-size: 16px !important;
+}
+
+/* Compact pay / receive summary card */
+.swap-review-summary {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--bg-surface);
+  padding: 2px 16px;
+}
+
+.swap-review-summary__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 0;
+}
+
+.swap-review-summary__label {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.swap-review-summary__amount {
+  font-size: 23px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+  color: var(--ink-1);
+  word-break: break-word;
+}
+
+.swap-review-summary__divider {
+  height: 1px;
+  background: var(--line);
+}
+
+/* Compact quote details inside the review page */
+.swap-review-page .swap-review-details {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 8px 16px;
+  gap: 0;
+}
+
+.swap-review-page .swap-details-row {
+  min-height: 30px;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.swap-review-page .swap-details-row span {
+  flex: 0 0 auto;
+}
+
+.swap-review-page .swap-details-row strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swap-review-page .swap-review-fee-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+
+/* ============================================================
+   SWAP STATUS SCREENS — submitted / pending / confirmed / failed
+   Shared full-page pattern. Same shell as the review page:
+   absolute inset:0 inside .ext-popup, no backdrop/blur/sheet.
+   Header / content / actions stack; fits 360x600 without scroll.
+   Works in popup AND fullscreen (overlays the centered card).
+   ============================================================ */
+.swap-status-page {
+  position: absolute;
+  inset: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  overflow: hidden;
+}
+
+.swap-status-header {
+  flex: 0 0 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-canvas);
+}
+
+.swap-status-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+.swap-status-title {
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--ink-1);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.swap-status-subtitle {
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.swap-status-spacer {
+  flex: 0 0 32px;
+  width: 32px;
+}
+
+.swap-status-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px 22px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Compact status card */
+.swap-status-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--bg-surface);
+}
+
+.swap-status-icon {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bg-surface);
+  background: var(--ink-3);
+}
+
+.swap-status-text {
+  min-width: 0;
+}
+
+.swap-status-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  color: var(--ink-1);
+}
+
+.swap-status-text p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--ink-3);
+}
+
+/* Pending spinner — subtle, no overlay */
+.swap-status-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.4);
+  border-top-color: var(--bg-surface);
+  animation: swap-status-spin 0.8s linear infinite;
+}
+
+@keyframes swap-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Status-specific tints: neutral/gray for pending, green confirmed, red failed */
+.swap-status-card--pending {
+  background: var(--bg-sunken);
+  border-color: var(--line);
+}
+.swap-status-card--pending .swap-status-icon {
+  background: var(--ink-3);
+}
+.swap-status-card--confirmed {
+  background: rgba(93, 143, 63, 0.1);
+  border-color: rgba(93, 143, 63, 0.28);
+}
+.swap-status-card--confirmed .swap-status-icon {
+  background: #5d8f3f;
+}
+.swap-status-card--failed {
+  background: rgba(168, 57, 57, 0.08);
+  border-color: rgba(168, 57, 57, 0.24);
+}
+.swap-status-card--failed .swap-status-icon {
+  background: var(--danger);
+}
+
+/* Transaction details card */
+.swap-status-details {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 6px 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.swap-status-details .swap-details-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.swap-status-details .swap-details-row + .swap-details-row {
+  border-top: 1px solid var(--line);
+}
+
+.swap-status-details .swap-details-row > span {
+  flex: 0 0 auto;
+}
+
+.swap-status-details .swap-details-row > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swap-status-hash {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Compact status pill */
+.swap-status-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.swap-status-badge--pending {
+  background: rgba(var(--ink-rgb), 0.06);
+  color: var(--ink-2);
+}
+.swap-status-badge--confirmed {
+  background: rgba(93, 143, 63, 0.16);
+  color: #5d8f3f;
+}
+.swap-status-badge--failed {
+  background: rgba(168, 57, 57, 0.12);
+  color: var(--danger);
+}
+
+/* Actions — pinned bottom, never clipped */
+.swap-status-actions {
+  flex: 0 0 auto;
+  padding: 10px 22px 14px;
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.swap-status-primary {
+  height: 50px !important;
+  border-radius: 13px !important;
+  font-size: 15.5px !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.swap-status-secondary {
+  height: 46px !important;
+  border-radius: 13px !important;
+  font-size: 15px !important;
+}
+
+.swap-status-tertiary {
+  align-self: center;
+  border: 0;
+  background: transparent;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink-3);
+  cursor: pointer;
+  text-decoration: none;
+}
+.swap-status-tertiary:hover {
+  color: var(--ink-1);
 }

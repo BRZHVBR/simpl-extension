@@ -14,7 +14,9 @@ import {
   BNB_SMART_CHAIN_ID,
   ETHEREUM_MAINNET_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
+  isSolanaChainId,
 } from "../networks/chain-registry";
+import { isValidSolanaAddress } from "../../chains/solana/solana.address";
 import { networkService } from "../networks/network.service";
 
 export type RegisteredToken = {
@@ -33,6 +35,9 @@ export type CustomToken = {
   name: string;
   decimals: number;
   createdAt: string;
+  // Optional resolved logo (e.g. Solana SPL metadata). Stored as a URL only,
+  // never image bytes. Shared key with custom-token.service's CustomToken.
+  logoURI?: string;
 };
 
 export type TokenPreview = {
@@ -44,6 +49,9 @@ export type TokenPreview = {
   balanceRaw: string;
   balanceFormatted: string;
   createdAt: string;
+  // Resolved logo URL when available (Solana SPL metadata); null/undefined → the
+  // generated placeholder icon is used.
+  logoUrl?: string | null;
 };
 
 export const REGISTERED_TOKENS: RegisteredToken[] = [
@@ -246,6 +254,27 @@ function normalizeTokenAddress(address: string): `0x${string}` {
   return getAddress(trimmedAddress) as `0x${string}`;
 }
 
+// Chain-aware address normalization for stored custom tokens. Solana mints are
+// base58 and case-sensitive — they are validated and kept verbatim (never
+// checksummed/lowercased). EVM addresses keep the existing checksum behaviour.
+function normalizeTokenAddressForChain(
+  chainId: number,
+  address: string,
+): `0x${string}` {
+  const trimmed = address.trim();
+
+  if (isSolanaChainId(chainId)) {
+    if (!isValidSolanaAddress(trimmed)) {
+      throw new Error("Invalid Solana token mint address.");
+    }
+    // Base58 is preserved as-is; the `0x…` cast satisfies the EVM-typed field
+    // without altering the value.
+    return trimmed as `0x${string}`;
+  }
+
+  return normalizeTokenAddress(trimmed);
+}
+
 function isCustomToken(value: unknown): value is CustomToken {
   if (!value || typeof value !== "object") return false;
 
@@ -340,7 +369,7 @@ export class TokenRegistryService {
         .filter((token) => token.chainId === chainId)
         .map((token) => ({
           ...token,
-          address: normalizeTokenAddress(token.address),
+          address: normalizeTokenAddressForChain(chainId, token.address),
         }));
     } catch {
       return [];
@@ -352,7 +381,7 @@ export class TokenRegistryService {
   }
 
   addToken(token: CustomToken): CustomToken[] {
-    const address = normalizeTokenAddress(token.address);
+    const address = normalizeTokenAddressForChain(token.chainId, token.address);
     const currentTokens = this.getTokensByChainId(token.chainId);
 
     const nextToken: CustomToken = {
@@ -373,7 +402,7 @@ export class TokenRegistryService {
   }
 
   removeToken(input: { chainId: number; address: string }): CustomToken[] {
-    const address = normalizeTokenAddress(input.address);
+    const address = normalizeTokenAddressForChain(input.chainId, input.address);
 
     const nextTokens = this.getTokensByChainId(input.chainId).filter((token) => {
       return token.address.toLowerCase() !== address.toLowerCase();

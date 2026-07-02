@@ -2,6 +2,7 @@ import { Contract, JsonRpcProvider, formatUnits } from "ethers";
 import type { EvmAddress } from "../accounts/derivation";
 import { balanceService } from "../balances/balance.service";
 import { networkService } from "../networks/network.service";
+import { setCachedTokenLogo } from "../../utils/token-logo-resolver";
 import { assetDiscoveryService } from "./asset-discovery.service";
 import { customTokenService, type CustomToken } from "./custom-token.service";
 import {
@@ -13,7 +14,11 @@ const ERC20_BALANCE_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
 ] as const;
 
-export type WalletAssetType = "native" | "erc20";
+// "trc20" is the TRON token standard, routed through the TRON adapter; "spl" is
+// the Solana token standard, routed through the Solana adapter; "jetton" is the
+// TON fungible-token standard, routed through the TON adapter. EVM flows only
+// ever produce "native" | "erc20".
+export type WalletAssetType = "native" | "erc20" | "trc20" | "spl" | "jetton";
 
 export type WalletAssetBalance = {
   id: string;
@@ -29,8 +34,11 @@ export type WalletAssetBalance = {
   updatedAt: string;
   isTransferable: boolean;
   visible: boolean;
-  usdPrice?: string | null;
-  usdValue?: string | null;
+  // Usually a string|null from the discovery gateway, but adapters that already
+  // resolved a numeric spot price (e.g. TON jettons via the read API) may set a
+  // number directly — HomePage prefers a numeric price/value when present.
+  usdPrice?: number | string | null;
+  usdValue?: number | string | null;
   logoUrl?: string | null;
   isSpam?: boolean;
   isVerified?: boolean;
@@ -53,6 +61,7 @@ type BalanceToken = {
   decimals: number;
   alwaysShow?: boolean;
   source: "registry" | "custom";
+  logoURI?: string | null;
 };
 
 function isPositiveRawBalance(rawBalance: string): boolean {
@@ -102,6 +111,7 @@ function mapCustomToken(token: CustomToken): BalanceToken {
     decimals: token.decimals,
     alwaysShow: true,
     source: "custom",
+    logoURI: token.logoURI ?? null,
   };
 }
 
@@ -177,6 +187,13 @@ export class TokenBalanceService {
         chainId,
       });
 
+      // Persist any logo URLs returned by discovery so they survive into custom-token renders
+      for (const asset of discoveredAssets) {
+        if (asset.contractAddress && asset.logoUrl) {
+          setCachedTokenLogo(asset.chainId, asset.contractAddress, asset.logoUrl);
+        }
+      }
+
       return discoveredAssets
         .filter((asset) => asset.type === "erc20")
         .filter((asset) => asset.balanceRaw !== "0")
@@ -234,12 +251,23 @@ export class TokenBalanceService {
       tokens.map((token) => this.getTokenBalance(provider, token, address)),
     );
 
-    return settledResults.flatMap((result) => {
+    // One failed token never drops the rest: allSettled isolates each call and
+    // we keep every fulfilled balance. Failures are logged with their token
+    // address + chainId for diagnostics (no secrets).
+    return settledResults.flatMap((result, index) => {
       if (result.status === "fulfilled") {
         return [result.value];
       }
 
-      console.debug("Failed to load token balance:", result.reason);
+      const token = tokens[index];
+      console.debug("[balances] token balance failed", {
+        chainId,
+        token: token?.address,
+        symbol: token?.symbol,
+        reason: result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason),
+      });
       return [];
     });
   }
@@ -271,7 +299,7 @@ export class TokenBalanceService {
       visible: token.alwaysShow === true || isPositiveRawBalance(rawBalanceString),
       usdPrice: null,
       usdValue: null,
-      logoUrl: null,
+      logoUrl: token.logoURI ?? null,
       isSpam: false,
       isVerified: token.source === "registry",
       source: token.source,

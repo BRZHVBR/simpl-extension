@@ -1,16 +1,33 @@
 // src/popup/routes/UnlockPage.tsx
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import logoUrl from "../../assets/simpl-logo.png";
 import type { FormEvent } from "react";
-import type { WalletState } from "../../core/storage/storage.types";
+import type {
+  BiometricUnlockSettings,
+  WalletState,
+} from "../../core/storage/storage.types";
 import { walletService } from "../../core/wallet/wallet.service";
-import { nativeMessagingClient } from "../../core/native/native-messaging.client";
-import { getBiometricWalletId } from "../../core/security/biometric-unlock.helpers";
+import {
+  biometricUnlockService,
+  BiometricError,
+} from "../../core/security/biometric-unlock.service";
+import { detectBiometricPlatform } from "../../core/security/biometric-unlock.helpers";
+import { biometricDebug } from "../../core/security/biometric-debug";
+import { consumeBiometricAutoPromptSuppression } from "../biometric-autoprompt";
+import { getCurrentSurface } from "../surface";
+import { t, useTranslation } from "../../i18n";
 
 type UnlockNotice = {
   type: "info" | "error" | "success";
   message: string;
 };
+
+// Safety net for a WebAuthn prompt that never resolves/rejects (notably a
+// fullscreen tab or side panel that lacks a fresh user activation, so the OS
+// dialog never surfaces). Bounded so the UI always leaves the "Waiting…" state
+// and the password path stays usable.
+const BIOMETRIC_TIMEOUT_MS = 12_000;
 
 type UnlockPageProps = {
   walletState: WalletState | null;
@@ -18,61 +35,53 @@ type UnlockPageProps = {
   onRestoreFromSeed?: () => void;
 };
 
-function decodeSecretFromBase64(secretBase64: string): string {
-  const binaryString = window.atob(secretBase64);
-  const bytes = Uint8Array.from(binaryString, (char) => char.charCodeAt(0));
-
-  return new TextDecoder().decode(bytes);
+// A biometric config is only usable when it is enabled AND carries the full set
+// of PRF wrapping material. Old/partial flags (e.g. a legacy `enabled: true`
+// with no credential) are treated as not-configured, so they never offer a
+// broken biometric prompt — the wallet just stays on password unlock.
+function readBiometricConfig(settings: BiometricUnlockSettings): {
+  credentialId: string;
+  prfSalt: string;
+  iv: string;
+  wrappedSecret: string;
+} | null {
+  if (!settings.enabled) return null;
+  const { credentialId, prfSalt, iv, wrappedSecret } = settings;
+  if (!credentialId || !prfSalt || !iv || !wrappedSecret) return null;
+  return { credentialId, prfSalt, iv, wrappedSecret };
 }
 
-function normalizeTouchIdError(error: unknown): UnlockNotice {
-  const message = error instanceof Error ? error.message : String(error);
-  const lowerMessage = message.toLowerCase();
-
-  if (
-    lowerMessage.includes("cancel") ||
-    lowerMessage.includes("canceled") ||
-    lowerMessage.includes("cancelled")
-  ) {
-    return {
-      type: "info",
-      message: "Touch ID was canceled. Try again or use password.",
-    };
+function biometricLabel(): string {
+  switch (detectBiometricPlatform()) {
+    case "apple":
+      return t("settings.touchId");
+    case "windows":
+      return t("settings.biometric.windowsHello");
+    default:
+      return t("settings.biometric.generic");
   }
-
-  if (
-    lowerMessage.includes("not found") ||
-    lowerMessage.includes("missing") ||
-    lowerMessage.includes("not enabled")
-  ) {
-    return {
-      type: "info",
-      message: "Touch ID unlock is not enabled. Use password instead.",
-    };
-  }
-
-  return {
-    type: "error",
-    message: "Touch ID is unavailable. Use your wallet password.",
-  };
 }
 
-function LogoMark() {
+function UnlockIcon() {
   return (
     <svg
-      viewBox="0 0 64 64"
-      width="40"
-      height="40"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
       aria-hidden="true"
-      style={{ color: "var(--ink-1)" }}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
     >
-      <path d="M0 6 L50 6 L50 38 L38 50 L0 50 Z" fill="currentColor" />
-      <rect x="10" y="26" width="22" height="4" fill="var(--bg-canvas)" />
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 7.5-2" />
     </svg>
   );
 }
 
-function TouchIdIcon() {
+function BiometricIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -95,143 +104,217 @@ function TouchIdIcon() {
   );
 }
 
-function UnlockIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="15"
-      height="15"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="5" y="11" width="14" height="10" rx="2" />
-      <path d="M8 11V8a4 4 0 0 1 7.5-2" />
-    </svg>
-  );
-}
-
-function getNoticeStyle(type: UnlockNotice["type"]) {
-  if (type === "error") {
-    return {
-      background: "var(--danger-soft)",
-      color: "var(--danger)",
-    };
-  }
-
-  if (type === "success") {
-    return {
-      background: "var(--secure-soft)",
-      color: "var(--secure)",
-    };
-  }
-
-  return {
-    background: "var(--warn-soft)",
-    color: "var(--warn)",
-  };
-}
-
 export function UnlockPage({
   walletState,
   onUnlocked,
   onRestoreFromSeed,
 }: UnlockPageProps) {
+  const { t } = useTranslation();
+  const label = biometricLabel();
+
+  const biometricConfig = walletState
+    ? readBiometricConfig(walletState.settings.biometricUnlock)
+    : null;
+
   const [password, setPassword] = useState("");
-  const [showPasswordMode, setShowPasswordMode] = useState(false);
+  // `biometricUsable` is null while we confirm the platform authenticator is
+  // present right now. Until it resolves true, the biometric button is hidden;
+  // the password form is always shown regardless.
+  const [biometricUsable, setBiometricUsable] = useState<boolean | null>(
+    biometricConfig ? null : false,
+  );
   const [notice, setNotice] = useState<UnlockNotice | null>(null);
-  const [isTouchIdLoading, setIsTouchIdLoading] = useState(false);
+  const [isBiometricLoading, setIsBiometricLoading] = useState(false);
   const [isPasswordLoading, setIsPasswordLoading] = useState(false);
+
+  // In-flight biometric attempt: the controller aborts a hung/cancelled prompt,
+  // and the monotonic id lets us ignore a late result (a prompt that resolves
+  // after the user already switched to password or started a new attempt).
+  const abortRef = useRef<AbortController | null>(null);
+  const attemptIdRef = useRef(0);
+  // Lets us re-focus the trigger synchronously inside the click handler, keeping
+  // the document active when navigator.credentials.get() fires (matters for the
+  // side panel surface).
+  const biometricButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const canSubmitPassword = password.trim().length > 0 && !isPasswordLoading;
 
-  async function handleTouchIdUnlock() {
+  // Abandon any pending biometric attempt: invalidate its result, abort the OS
+  // prompt, and leave the UI out of the "Waiting…" state. Used when the user
+  // explicitly chooses password while a prompt is in flight.
+  function cancelPendingBiometric() {
+    attemptIdRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsBiometricLoading(false);
+  }
+
+  // Biometric unlock runs ONLY from an explicit user click (no auto-prompt in
+  // any surface), so the WebAuthn call always carries a fresh user activation —
+  // the fix for the "Waiting…" hang in fullscreen/sidepanel. The password form
+  // stays visible throughout, so the user is never trapped in a pending state.
+  async function handleBiometricUnlock() {
+    if (!biometricConfig) return;
+
+    const surface = getCurrentSurface();
+
+    // Diagnostics captured at the very top of the click handler, BEFORE any
+    // async work, so the logged user-activation state reflects the gesture that
+    // is about to drive WebAuthn. All values are non-sensitive presence flags —
+    // never the password, secret, PRF output, or full wrappedSecret.
+    const activation = (
+      navigator as Navigator & {
+        userActivation?: { isActive?: boolean; hasBeenActive?: boolean };
+      }
+    ).userActivation;
+    biometricDebug("unlock:click", {
+      surface,
+      hasFocus:
+        typeof document !== "undefined" && typeof document.hasFocus === "function"
+          ? document.hasFocus()
+          : undefined,
+      userActivationIsActive: activation?.isActive,
+      userActivationHasBeenActive: activation?.hasBeenActive,
+      hasConfig: Boolean(biometricConfig),
+      hasCredentialId: Boolean(biometricConfig.credentialId),
+      hasWrappedSecret: Boolean(biometricConfig.wrappedSecret),
+    });
+
+    // Keep focus inside this surface synchronously, within the gesture, before
+    // the WebAuthn call — some surfaces (side panel) drop the OS prompt if the
+    // document is not the active/focused context at get() time.
+    biometricButtonRef.current?.focus();
+
+    // Supersede any prior attempt and start a fresh, guarded one.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const attemptId = ++attemptIdRef.current;
+    let timedOut = false;
+
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      biometricDebug("unlock:timeout", { ms: BIOMETRIC_TIMEOUT_MS });
+      controller.abort();
+    }, BIOMETRIC_TIMEOUT_MS);
+
     try {
       setNotice(null);
-      setIsTouchIdLoading(true);
+      setIsBiometricLoading(true);
+      biometricDebug("unlock:start", { surface });
 
-      if (!walletState) {
-        throw new Error("Wallet state is missing.");
-      }
-
-      const biometricSettings = walletState.settings.biometricUnlock;
-
-      if (!biometricSettings.enabled) {
-        setNotice({
-          type: "info",
-          message: "Touch ID unlock is not enabled. Use password instead.",
-        });
-        setShowPasswordMode(true);
+      // skipAvailabilityCheck: availability was already confirmed in state (the
+      // button only renders when biometricUsable === true), so we go STRAIGHT to
+      // navigator.credentials.get() with no intervening async hop that could eat
+      // the transient user activation. This is the side-panel fix.
+      const secret = await biometricUnlockService.unlock(biometricConfig, {
+        signal: controller.signal,
+        skipAvailabilityCheck: true,
+      });
+      // A late result from a superseded/cancelled attempt must not unlock or
+      // touch the UI.
+      if (attemptId !== attemptIdRef.current) {
+        biometricDebug("unlock:ignored-late-result");
         return;
       }
-
-      const fallbackWalletId = getBiometricWalletId(walletState);
-      const walletIds = Array.from(
-        new Set(
-          [
-            biometricSettings.credentialId,
-            fallbackWalletId,
-          ].filter((value): value is string => Boolean(value)),
-        ),
-      );
-
-      let response: Awaited<ReturnType<typeof nativeMessagingClient.getVaultKey>> | null = null;
-      let lastTouchIdError: string | undefined;
-
-      for (const walletId of walletIds) {
-        const nextResponse = await nativeMessagingClient.getVaultKey(walletId);
-
-        if (nextResponse.ok) {
-          response = nextResponse;
-          break;
-        }
-
-        lastTouchIdError = nextResponse.error;
-      }
-
-      if (!response?.ok) {
-        throw new Error(lastTouchIdError ?? "Touch ID vault key is unavailable.");
-      }
-
-      const passwordFromKeychain = decodeSecretFromBase64(
-        response.data.vaultKeyBase64,
-      );
-
-      await walletService.unlockWallet({
-        password: passwordFromKeychain,
-      });
-
+      await walletService.unlockWallet({ password: secret });
+      biometricDebug("unlock:success");
       await onUnlocked?.();
     } catch (error) {
-      setNotice(normalizeTouchIdError(error));
-      setShowPasswordMode(true);
+      if (attemptId !== attemptIdRef.current) return;
+      const code = error instanceof BiometricError ? error.code : "failed";
+      biometricDebug("unlock:error", { code, timedOut });
+
+      if (timedOut) {
+        // Prompt never responded — leave a soft hint; the password form is
+        // already visible so the user can proceed immediately.
+        setNotice({ type: "info", message: t("unlock.biometricTimeout", { label }) });
+      } else if (code === "cancelled") {
+        // User dismissed the OS prompt — keep the biometric option visible so
+        // they can retry, and never surface a crash or a re-prompt loop.
+        setNotice({ type: "info", message: t("unlock.touchIdCancelled") });
+      } else if (code === "unavailable" || code === "unsupported") {
+        // Authenticator went away (or never supported the secure flow) — hide
+        // the biometric option; password unlock continues to work.
+        setBiometricUsable(false);
+        setNotice({ type: "info", message: t("unlock.touchIdNotSetUp") });
+      } else {
+        // Includes a successful WebAuthn assertion whose secret failed to unlock
+        // the wallet (decrypt/unlockWallet error) — fall back to password.
+        setNotice({ type: "error", message: t("unlock.touchIdFailed") });
+      }
     } finally {
-      setIsTouchIdLoading(false);
+      window.clearTimeout(timeoutId);
+      if (abortRef.current === controller) abortRef.current = null;
+      // Only the current attempt owns the spinner; a superseded one already
+      // cleared it via cancelPendingBiometric / a newer attempt.
+      if (attemptId === attemptIdRef.current) {
+        setIsBiometricLoading(false);
+      }
     }
   }
 
+  // Probe whether a platform authenticator is present, to decide if the
+  // biometric BUTTON should appear. We deliberately do NOT auto-prompt in any
+  // surface: WebAuthn needs a transient user activation, and an effect-driven
+  // prompt (no user gesture) can hang on "Waiting…" in fullscreen/sidepanel.
+  // Biometrics run only from an explicit click (handleBiometricUnlock). We still
+  // consume the manual-lock suppression one-shot so the stored flag never
+  // lingers (the suppression infra is preserved for a future auto-prompt).
+  useEffect(() => {
+    if (!biometricConfig) return;
+    let active = true;
+    consumeBiometricAutoPromptSuppression();
+    const surface = getCurrentSurface();
+
+    // Every surface — popup, fullscreen AND side panel — runs the same platform
+    // authenticator probe to decide whether to render the biometric button. The
+    // side panel is no longer hard-blocked: the actual WebAuthn call is driven
+    // straight from the click handler with a fresh user activation (see
+    // handleBiometricUnlock), which is what lets Chrome raise the OS prompt
+    // there. We still never auto-prompt in any surface.
+    void biometricUnlockService
+      .isAvailable()
+      .then((available) => {
+        if (!active) return;
+        biometricDebug("isAvailable", {
+          surface,
+          available,
+          hasCredentialId: Boolean(biometricConfig.credentialId),
+          hasWrappedSecret: Boolean(biometricConfig.wrappedSecret),
+        });
+        setBiometricUsable(available);
+      })
+      .catch(() => {
+        if (!active) return;
+        setBiometricUsable(false);
+      });
+
+    return () => {
+      active = false;
+      // Drop any in-flight prompt so it can't resolve into an unmounted tree.
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handlePasswordUnlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     if (!canSubmitPassword) return;
+
+    // Going the password route abandons any pending biometric prompt so a late
+    // assertion can't hijack the UI after the wallet is already unlocking.
+    cancelPendingBiometric();
 
     try {
       setNotice(null);
       setIsPasswordLoading(true);
-
-      await walletService.unlockWallet({
-        password,
-      });
-
+      await walletService.unlockWallet({ password });
+      biometricDebug("password:success");
       await onUnlocked?.();
     } catch {
-      setNotice({
-        type: "error",
-        message: "Incorrect password. Please try again.",
-      });
+      setNotice({ type: "error", message: t("unlock.wrongPassword") });
     } finally {
       setIsPasswordLoading(false);
     }
@@ -239,72 +322,43 @@ export function UnlockPage({
 
   return (
     <div className="ext-popup" data-screen-label="02 Unlock">
-      <div
-        className="screen-body"
-        style={{
-          padding: "60px 24px 24px",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <LogoMark />
-
-        <div className="t-h2" style={{ marginTop: 12 }}>
-          Welcome back
+      <div className="screen-body unlock-body">
+        {/* Logo + title + subtitle */}
+        <div className="unlock-hero">
+          <img
+            className="app-logo"
+            src={logoUrl}
+            alt="Simpl wallet"
+            style={{ width: 160, height: "auto", objectFit: "contain" }}
+          />
+          <div className="t-h2 unlock-title">{t("unlock.title")}</div>
+          <div className="unlock-subtitle">{t("unlock.subtitle")}</div>
         </div>
 
-        <div
-          style={{
-            color: "var(--ink-3)",
-            fontSize: 13,
-            textAlign: "center",
-            lineHeight: 1.45,
-            maxWidth: 260,
-          }}
-        >
-          Unlock your self-custody wallet to access accounts and sign
-          transactions.
-        </div>
-
+        {/* Inline notice (non-blocking) */}
         {notice ? (
-          <div
-            style={{
-              ...getNoticeStyle(notice.type),
-              width: "100%",
-              marginTop: 18,
-              padding: "10px 12px",
-              borderRadius: 8,
-              fontSize: 12,
-              lineHeight: 1.45,
-            }}
-          >
+          <div className={`unlock-notice unlock-notice--${notice.type}`}>
             {notice.message}
           </div>
         ) : null}
 
-        {showPasswordMode ? (
+        {/* Primary actions — password is ALWAYS visible so the user can never be
+            trapped in a biometric "Waiting…" state. Touch ID is an explicit,
+            secondary action (no auto-prompt in any surface). */}
+        <div className="unlock-actions">
           <form
-            onSubmit={handlePasswordUnlock}
-            style={{
-              width: "100%",
-              marginTop: 24,
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
-            }}
+            onSubmit={(e) => void handlePasswordUnlock(e)}
+            className="unlock-password-form"
           >
             <div>
-              <span className="field-label">Password</span>
-
+              <span className="field-label">{t("unlock.passwordLabel")}</span>
               <input
                 className="input lg"
                 type="password"
-                placeholder="Enter password"
+                placeholder={t("unlock.passwordPlaceholder")}
                 value={password}
                 autoComplete="current-password"
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={(e) => setPassword(e.target.value)}
               />
             </div>
 
@@ -314,79 +368,62 @@ export function UnlockPage({
               disabled={!canSubmitPassword}
             >
               <UnlockIcon />
-              {isPasswordLoading ? "Unlocking…" : "Unlock"}
+              {isPasswordLoading ? t("unlock.unlocking") : t("unlock.unlock")}
             </button>
           </form>
-        ) : (
-          <button
-            className="btn primary lg full"
-            type="button"
-            onClick={() => void handleTouchIdUnlock()}
-            disabled={isTouchIdLoading || isPasswordLoading}
-            style={{ marginTop: 32 }}
-          >
-            <TouchIdIcon />
-            {isTouchIdLoading ? "Waiting for Touch ID…" : "Unlock with Touch ID"}
-          </button>
-        )}
 
-        <button
-          className="btn secondary lg full"
-          type="button"
-          onClick={() => {
-            setShowPasswordMode((value) => !value);
-            setNotice(null);
-          }}
-          disabled={isTouchIdLoading || isPasswordLoading}
-          style={{ marginTop: 0 }}
-        >
-          {showPasswordMode ? "Hide password unlock" : "Use password instead"}
-        </button>
+          {/* Biometric quick action — only when a usable credential exists, and
+              only triggered by this click (carries a fresh user activation). */}
+          {biometricUsable === true ? (
+            <button
+              ref={biometricButtonRef}
+              className="btn secondary lg full"
+              type="button"
+              onClick={() => void handleBiometricUnlock()}
+              disabled={isBiometricLoading || isPasswordLoading}
+            >
+              <BiometricIcon />
+              {isBiometricLoading
+                ? t("unlock.waitingTouchId", { label })
+                : t("unlock.withTouchId", { label })}
+            </button>
+          ) : null}
 
-        <div style={{ flex: 1 }} />
+          {/* Explicit escape while a prompt is pending (password is also always
+              available above). Cancels the attempt and clears the spinner. */}
+          {isBiometricLoading ? (
+            <button
+              className="btn ghost full"
+              type="button"
+              onClick={() => {
+                cancelPendingBiometric();
+                setNotice(null);
+              }}
+              style={{ height: 34, fontSize: 12, color: "var(--ink-3)" }}
+            >
+              {t("unlock.usePassword")}
+            </button>
+          ) : null}
+        </div>
 
-        <div
-          style={{
-            width: "100%",
-            padding: "12px",
-            border: "1px solid var(--line)",
-            borderRadius: 8,
-            background: "var(--bg-surface)",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: "var(--ink-1)",
-              marginBottom: 4,
-            }}
-          >
-            Seed phrase stays on your device.
+        {/* Security assurance card */}
+        <div className="unlock-security-card">
+          <div className="unlock-security-card__title">
+            {t("unlock.securityTitle")}
           </div>
-
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--ink-3)",
-              lineHeight: 1.45,
-            }}
-          >
-            SIMPLE never stores or accesses it.
+          <div className="unlock-security-card__body">
+            {t("unlock.securityBody")}
           </div>
         </div>
 
+        {/* Restore link */}
         <button
           className="btn ghost full"
           type="button"
           onClick={onRestoreFromSeed}
-          style={{
-            height: 34,
-            fontSize: 12,
-            color: "var(--ink-3)",
-          }}
+          style={{ height: 34, fontSize: 12, color: "var(--ink-3)" }}
         >
-          Forgot password · restore from phrase
+          {t("unlock.forgotPassword")}
         </button>
       </div>
     </div>

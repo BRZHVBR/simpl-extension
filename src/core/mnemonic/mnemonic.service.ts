@@ -5,7 +5,7 @@ import {
 
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 
-export type MnemonicWordCount = 12 | 24;
+export type MnemonicWordCount = 12 | 18 | 24;
 
 export type GenerateMnemonicOptions = {
   wordCount?: MnemonicWordCount;
@@ -34,10 +34,11 @@ export type MnemonicValidationResult =
 
 const STRENGTH_BY_WORD_COUNT: Record<MnemonicWordCount, number> = {
   12: 128,
+  18: 192,
   24: 256,
 };
 
-const SUPPORTED_WORD_COUNTS: MnemonicWordCount[] = [12, 24];
+const SUPPORTED_WORD_COUNTS: MnemonicWordCount[] = [12, 18, 24];
 
 export class MnemonicService {
   generateMnemonic(options: GenerateMnemonicOptions = {}): string {
@@ -88,7 +89,7 @@ export class MnemonicService {
         words,
         wordCount,
         errorCode: "INVALID_WORD_COUNT",
-        message: "Seed phrase must contain 12 or 24 words.",
+        message: "Seed phrase must contain 12, 18, or 24 words.",
       };
     }
 

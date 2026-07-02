@@ -4,8 +4,32 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
+// getsimpl-core is the shared source of truth. It lives in a sibling repo and
+// exports raw TypeScript, so alias the package names straight to that source —
+// no build/publish step, mirroring the dashboard's setup.
+const corePkg = (name: string) =>
+  resolve(__dirname, `../getsimpl-core/packages/${name}/src/index.ts`);
+
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@getsimpl/core": corePkg("core"),
+      "@getsimpl/chains": corePkg("chains"),
+      "@getsimpl/formatters": corePkg("formatters"),
+      "@getsimpl/accounts": corePkg("accounts"),
+      "@getsimpl/assets": corePkg("assets"),
+      "@getsimpl/balances": corePkg("balances"),
+      "@getsimpl/portfolio": corePkg("portfolio"),
+      "@getsimpl/activity": corePkg("activity"),
+      "@getsimpl/errors": corePkg("errors"),
+      "@getsimpl/swaps": corePkg("swaps"),
+      "@getsimpl/bridges": corePkg("bridges"),
+      "@getsimpl/adapters": corePkg("adapters"),
+      "@getsimpl/transactions": corePkg("transactions"),
+      "@getsimpl/shared-types": corePkg("shared-types"),
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

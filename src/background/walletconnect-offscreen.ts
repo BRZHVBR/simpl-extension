@@ -29,6 +29,17 @@ const DEFAULT_METHODS = [
 
 const DEFAULT_EVENTS = ["accountsChanged", "chainChanged"];
 
+// --- TRON namespace support (additive; the eip155 path below is unchanged) ---
+// TRON Mainnet CAIP-2 reference used by WalletConnect TRON dApps (e.g. Tronscan).
+const TRON_WC_CHAIN = "tron:0x2b6653dc";
+const DEFAULT_TRON_METHODS = [
+  "tron_signTransaction",
+  "tron_signMessage",
+  "tron_sendTransaction",
+];
+const DEFAULT_TRON_EVENTS = ["accountsChanged", "chainChanged"];
+const SUPPORTED_TRON_METHODS = new Set(DEFAULT_TRON_METHODS);
+
 type WalletConnectPendingRequest = {
   topic: string;
   id: number;
@@ -50,6 +61,7 @@ type ConnectedSite = {
   origin: string;
   name?: string;
   iconUrl?: string;
+  type?: "evm" | "tron" | "walletconnect";
   connectedAt?: string;
   lastUsedAt?: string;
 };
@@ -680,6 +692,8 @@ async function saveConnectedSiteFromProposal(proposal: any) {
     iconUrl: Array.isArray(metadata.icons) && typeof metadata.icons[0] === "string"
       ? metadata.icons[0]
       : undefined,
+    // TRON proposals get a TRON badge; other WC sessions show WalletConnect.
+    type: proposalRequestsTron(proposal) ? "tron" : "walletconnect",
     connectedAt: existing.find((site) => site.id === origin)?.connectedAt ?? now,
     lastUsedAt: now,
   };
@@ -708,6 +722,28 @@ async function getSelectedWalletAccount() {
 
   if (!response?.ok || !response.account) {
     throw new Error(response?.error ?? "No selected SIMPLE account.");
+  }
+
+  return response.account;
+}
+
+// TRON account (base58 T… + hex 41…) for the selected wallet account. Resolved
+// in the service worker via walletService.getSelectedTronAccountInfo() — the
+// private key never reaches the offscreen engine.
+async function getSelectedTronAccount() {
+  const response = await sendServiceWorkerMessage<{
+    ok?: boolean;
+    error?: string;
+    account?: {
+      base58: string;
+      hex: string;
+    };
+  }>({
+    type: "SIMPLE_WALLETCONNECT_GET_SELECTED_TRON_ACCOUNT",
+  });
+
+  if (!response?.ok || !response.account) {
+    throw new Error(response?.error ?? "No selected TRON account.");
   }
 
   return response.account;
@@ -752,6 +788,141 @@ function getRequestedEvents(proposal: any): string[] {
   ]);
 }
 
+// --- TRON namespace builder (isolated; never touched by the eip155 path) -------
+
+function getRequestedTronValues(
+  proposal: any,
+  key: "chains" | "methods" | "events",
+): string[] {
+  const required = proposal?.requiredNamespaces?.tron?.[key];
+  const optional = proposal?.optionalNamespaces?.tron?.[key];
+
+  return uniqueStrings([
+    ...(Array.isArray(required) ? required : []),
+    ...(Array.isArray(optional) ? optional : []),
+  ]);
+}
+
+function proposalRequestsTron(proposal: any): boolean {
+  return Boolean(
+    proposal?.requiredNamespaces?.tron || proposal?.optionalNamespaces?.tron,
+  );
+}
+
+// Build the approved `tron` namespace, or return null when the proposal does not
+// request TRON (in which case behaviour is exactly as before — eip155 only).
+// Throws a clear error (→ session rejected) when a REQUIRED tron chain or method
+// is outside what SIMPL supports.
+async function buildTronNamespace(proposal: any) {
+  if (!proposalRequestsTron(proposal)) {
+    return null;
+  }
+
+  // Only TRON Mainnet is supported. Reject if a different chain is required.
+  const requiredChains = Array.isArray(proposal?.requiredNamespaces?.tron?.chains)
+    ? (proposal.requiredNamespaces.tron.chains as string[])
+    : [];
+  const unsupportedChain = requiredChains.find((chain) => chain !== TRON_WC_CHAIN);
+  if (unsupportedChain) {
+    throw new Error(
+      `Unsupported TRON chain requested: ${unsupportedChain}. Only ${TRON_WC_CHAIN} is supported.`,
+    );
+  }
+
+  // Reject if a REQUIRED method is one we cannot service.
+  const requiredMethods = Array.isArray(proposal?.requiredNamespaces?.tron?.methods)
+    ? (proposal.requiredNamespaces.tron.methods as string[])
+    : [];
+  const unsupportedMethod = requiredMethods.find(
+    (method) => !SUPPORTED_TRON_METHODS.has(method),
+  );
+  if (unsupportedMethod) {
+    throw new Error(`Unsupported TRON method requested: ${unsupportedMethod}.`);
+  }
+
+  const tron = await getSelectedTronAccount();
+
+  return {
+    chains: [TRON_WC_CHAIN],
+    methods: DEFAULT_TRON_METHODS,
+    events: uniqueStrings([
+      ...DEFAULT_TRON_EVENTS,
+      ...getRequestedTronValues(proposal, "events"),
+    ]),
+    // CAIP-10 account, e.g. tron:0x2b6653dc:T… — TRON base58, never an EVM 0x.
+    accounts: [`${TRON_WC_CHAIN}:${tron.base58}`],
+  };
+}
+
+// NON-SENSITIVE description of a request payload for debug storage: only the
+// top-level key names / primitive type — never values (a message or signature
+// must never be stored).
+function describeWcParamsShape(params: unknown): string {
+  const value = Array.isArray(params) ? params[0] : params;
+  if (value === null) return "null";
+  if (typeof value === "object") {
+    return `object{${Object.keys(value as Record<string, unknown>).sort().join(",")}}`;
+  }
+  return typeof value;
+}
+
+// Relay an approved TRON request (sign message / sign tx / send tx) to the
+// signing layer in the service worker and respond to the dApp with the result.
+// The private key, message and signature never enter this engine — only the
+// service-worker round-trip result. Stores a non-sensitive request shape only.
+async function approveTronWalletConnectRequest(input: {
+  walletKit: any;
+  pendingRequest: WalletConnectPendingRequest;
+  password: string | undefined;
+  serviceWorkerType: string;
+}) {
+  const { walletKit, pendingRequest, password, serviceWorkerType } = input;
+
+  if (!password?.trim()) {
+    throw new Error("Wallet password is required.");
+  }
+
+  await chromeStorageSet({
+    lastWalletConnectTronRequestDebug: {
+      method: pendingRequest.method,
+      paramsShape: describeWcParamsShape(pendingRequest.params),
+      topic: pendingRequest.topic,
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  const response = await sendServiceWorkerMessage<{
+    ok?: boolean;
+    error?: string;
+    result?: unknown;
+  }>({
+    type: serviceWorkerType,
+    password: password.trim(),
+    params: pendingRequest.params,
+  });
+
+  if (
+    !response?.ok ||
+    response.result === undefined ||
+    response.result === null
+  ) {
+    throw new Error(response?.error ?? "TRON request failed.");
+  }
+
+  await (walletKit as any).respondSessionRequest?.({
+    topic: pendingRequest.topic,
+    response: {
+      id: pendingRequest.id,
+      jsonrpc: "2.0",
+      result: response.result,
+    },
+  });
+
+  await clearPendingWalletConnectRequest();
+
+  return { result: response.result };
+}
+
 async function buildNamespacesForProposal(proposal: any) {
   const selected = await getSelectedWalletAccount();
   const chains = getRequestedEip155Chains(proposal);
@@ -759,7 +930,7 @@ async function buildNamespacesForProposal(proposal: any) {
   const events = getRequestedEvents(proposal);
   const accounts = chains.map((chain) => `${chain}:${selected.address}`);
 
-  const namespaces = {
+  const namespaces: Record<string, unknown> = {
     eip155: {
       chains,
       methods,
@@ -767,6 +938,13 @@ async function buildNamespacesForProposal(proposal: any) {
       accounts,
     },
   };
+
+  // Additive: include a TRON namespace when the dApp asks for one. The eip155
+  // object above is unchanged; this only adds a sibling `tron` key.
+  const tronNamespace = await buildTronNamespace(proposal);
+  if (tronNamespace) {
+    namespaces.tron = tronNamespace;
+  }
 
   const debugPayload = {
     requiredNamespaces: proposal?.requiredNamespaces,
@@ -1038,6 +1216,36 @@ async function approvePendingWalletConnectRequest(password?: string) {
     return {
       result: null,
     };
+  }
+
+  // --- TRON: sign an unsigned transaction (sign-only; NOT broadcast) ---------
+  if (pendingRequest.method === "tron_signTransaction") {
+    return approveTronWalletConnectRequest({
+      walletKit,
+      pendingRequest,
+      password,
+      serviceWorkerType: "SIMPLE_WALLETCONNECT_TRON_SIGN_TRANSACTION",
+    });
+  }
+
+  // --- TRON: sign a message (local ECDSA; NOT broadcast) ---------------------
+  if (pendingRequest.method === "tron_signMessage") {
+    return approveTronWalletConnectRequest({
+      walletKit,
+      pendingRequest,
+      password,
+      serviceWorkerType: "SIMPLE_WALLETCONNECT_TRON_SIGN_MESSAGE",
+    });
+  }
+
+  // --- TRON: sign AND broadcast a transaction --------------------------------
+  if (pendingRequest.method === "tron_sendTransaction") {
+    return approveTronWalletConnectRequest({
+      walletKit,
+      pendingRequest,
+      password,
+      serviceWorkerType: "SIMPLE_WALLETCONNECT_TRON_SEND_TRANSACTION",
+    });
   }
 
   throw new Error(`${pendingRequest.method} approval is not supported yet.`);

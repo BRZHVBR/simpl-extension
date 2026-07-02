@@ -1,40 +1,74 @@
 /// <reference types="chrome" />
 
+// Must be first: installs the Buffer/global polyfills @solana/web3.js needs at
+// runtime, before any Solana code (reached via walletService) is evaluated.
+import "../polyfills/buffer";
 import { walletService } from "../core/wallet/wallet.service";
-import { getChainById } from "../core/networks/chain-registry";
+import { storageRepository } from "../core/storage/storage.repository";
+import {
+  getChainById,
+  TRON_MAINNET_CHAIN_ID,
+  BITCOIN_MAINNET_CHAIN_ID,
+  BITCOIN_TESTNET_CHAIN_ID,
+} from "../core/networks/chain-registry";
+import type { WalletAccount } from "../core/accounts/account.types";
 
+// Message Settings sends after the user changes "Default open mode" so the
+// service worker re-applies the toolbar-icon behavior without a reload.
+export const DEFAULT_OPEN_MODE_CHANGED_MESSAGE = "SIMPL_DEFAULT_OPEN_MODE_CHANGED";
 
-
-function disableSidePanelOnActionClick() {
+// Apply the user's "Default open mode" preference to the toolbar icon: when set
+// to "sidePanel", clicking the action opens the slide-out side panel; otherwise
+// it opens the classic popup (openPanelOnActionClick: false). Reads the stored,
+// normalized setting — defaults to "popup" for fresh/legacy installs.
+async function applyPanelBehaviorFromSettings() {
   if (!chrome.sidePanel?.setPanelBehavior) {
     console.debug("chrome.sidePanel API is not available.");
     return;
   }
 
-  chrome.sidePanel
-    .setPanelBehavior({ openPanelOnActionClick: false })
-    .then(() => {
-      console.log("Side panel on action click disabled.");
-    })
-    .catch((error) => {
-      console.error("Failed to disable side panel behavior:", error);
-    });
+  let openPanelOnActionClick = false;
+
+  try {
+    const walletState = await storageRepository.getWalletState();
+    openPanelOnActionClick =
+      walletState.settings.defaultOpenMode === "sidePanel";
+  } catch (error) {
+    console.debug("Could not read defaultOpenMode; using popup:", error);
+  }
+
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick });
+    console.log(
+      `Toolbar open mode: ${openPanelOnActionClick ? "side panel" : "popup"}.`,
+    );
+  } catch (error) {
+    console.error("Failed to apply side panel behavior:", error);
+  }
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("Local EVM Wallet extension installed.");
-  disableSidePanelOnActionClick();
+  console.log("simpl extension installed.");
+  void applyPanelBehaviorFromSettings();
   void pingWalletConnectEngine();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  console.log("Local EVM Wallet extension started.");
-  disableSidePanelOnActionClick();
+  console.log("simpl extension started.");
+  void applyPanelBehaviorFromSettings();
   void pingWalletConnectEngine();
 });
 
 // Also run once when service worker is evaluated.
-disableSidePanelOnActionClick();
+void applyPanelBehaviorFromSettings();
+
+// Re-apply the toolbar behavior when Settings changes the default open mode.
+chrome.runtime.onMessage.addListener((message: { type?: string }) => {
+  if (message?.type === DEFAULT_OPEN_MODE_CHANGED_MESSAGE) {
+    void applyPanelBehaviorFromSettings();
+  }
+  return false;
+});
 
 type SimpleRuntimeMessage = {
   type?: string;
@@ -310,6 +344,69 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "SIMPLE_WALLETCONNECT_GET_SELECTED_TRON_ACCOUNT") {
+    void walletService
+      .getSelectedTronAccountInfo()
+      .then((account) => {
+        sendResponse({ ok: true, account });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_TRON_SIGN_TRANSACTION") {
+    // Sign-only: return the signed tx; the dApp decides whether to broadcast.
+    void walletService
+      .signTronDappTransaction({
+        transaction: message.params,
+        password: typeof message.password === "string" ? message.password : undefined,
+      })
+      .then((result) => {
+        sendResponse({ ok: true, result });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_TRON_SIGN_MESSAGE") {
+    void walletService
+      .signTronDappMessage({
+        message: message.params,
+        password: typeof message.password === "string" ? message.password : undefined,
+      })
+      .then((result) => {
+        sendResponse({ ok: true, result: result.signature });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SIMPLE_WALLETCONNECT_TRON_SEND_TRANSACTION") {
+    // Sign AND broadcast; return the txID to the dApp.
+    void walletService
+      .sendTronDappTransaction({
+        transaction: message.params,
+        password: typeof message.password === "string" ? message.password : undefined,
+      })
+      .then((result) => {
+        sendResponse({ ok: true, result: result.txId });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: getErrorMessage(error) });
+      });
+
+    return true;
+  }
+
   if (message?.type === "SIMPLE_WALLETCONNECT_SEND_PREPARED_TRANSACTION") {
     void walletService
       .sendSelectedPreparedTransaction({
@@ -389,7 +486,16 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 type DappPendingApproval = {
   id: string;
   origin: string;
-  kind: "connect" | "personal_sign" | "typed_data" | "switch_chain" | "transaction";
+  kind:
+    | "connect"
+    | "personal_sign"
+    | "typed_data"
+    | "switch_chain"
+    | "transaction"
+    | "tron_connect"
+    | "tron_sign";
+  // "tron" for TRON-namespace requests, "evm" (default) otherwise.
+  namespace?: "evm" | "tron";
   signingParams?: { method: string; params: unknown[] };
   switchChainId?: number;
   transactionParams?: {
@@ -400,9 +506,16 @@ type DappPendingApproval = {
     gas?: string;
     gasPrice?: string;
   };
+  // TRON connect/sign context.
+  tronAddress?: string;
+  tronAddressHex?: string;
+  tronTransaction?: unknown;
   resolve: (result: unknown) => void;
   reject: (error: { code: number; message: string }) => void;
 };
+
+// TRON Mainnet chain id in the hex form TRON dApps expect (0x2b6653dc).
+const TRON_CHAIN_ID_HEX = `0x${TRON_MAINNET_CHAIN_ID.toString(16)}`;
 
 const pendingDappApprovals = new Map<string, DappPendingApproval>();
 let dappApprovalWindowId: number | null = null;
@@ -481,7 +594,11 @@ async function getDappConnectionForOrigin(origin: string): Promise<boolean> {
 }
 
 // Save a new connection to the connectedSites array (same format as ConnectedSitesPage).
-async function saveDappConnection(origin: string): Promise<void> {
+// `type` drives the network badge shown in the Connected Sites UI.
+async function saveDappConnection(
+  origin: string,
+  type: "evm" | "tron" = "evm",
+): Promise<void> {
   const stored = await chrome.storage.local.get("connectedSites");
   const existing = Array.isArray(stored["connectedSites"])
     ? (stored["connectedSites"] as unknown[])
@@ -499,6 +616,7 @@ async function saveDappConnection(origin: string): Promise<void> {
   filtered.push({
     id: origin,
     origin,
+    type,
     connectedAt: now,
     lastUsedAt: now,
   });
@@ -575,11 +693,107 @@ function decodeErc20Approve(data: string | undefined): DecodedErc20Approve | nul
   }
 }
 
-async function broadcastProviderEvent(event: string, data: unknown): Promise<void> {
+// Summarize a TRON transaction for the approval popup: the contract type
+// (e.g. TransferContract / TriggerSmartContract) and a truncated JSON preview.
+function extractTronTxDisplay(tx: unknown): {
+  contractType?: string;
+  json?: string;
+} {
+  try {
+    const t = tx as { raw_data?: { contract?: Array<{ type?: string }> } };
+    const contractType = t?.raw_data?.contract?.[0]?.type;
+    const json = JSON.stringify(tx, null, 2);
+    return {
+      contractType: typeof contractType === "string" ? contractType : undefined,
+      json: json.length > 4000 ? `${json.slice(0, 4000)}…` : json,
+    };
+  } catch {
+    return {};
+  }
+}
+
+// Public, sanitized account metadata handed to a connected first-party surface
+// (the SIMPL dashboard). ONLY public data: id, display name, type, active flag,
+// avatar seed, and public chain addresses. NEVER key material, mnemonic,
+// derivation paths, encrypted vault, or raw storage records.
+type SimplDashboardAccount = {
+  id: string;
+  name: string;
+  type: "primary" | "imported" | "watch-only";
+  isActive: boolean;
+  avatarSeed: string;
+  addresses: {
+    evm?: string;
+    tron?: string;
+    btc?: string;
+    btcTestnet?: string;
+    solana?: string;
+    ton?: string;
+  };
+};
+
+function toSafeAccountMeta(
+  account: WalletAccount,
+  selectedAccountId: string | null,
+): SimplDashboardAccount {
+  const typeMap: Record<WalletAccount["type"], SimplDashboardAccount["type"]> = {
+    mnemonic: "primary",
+    importedMnemonic: "imported",
+    privateKey: "imported",
+    watch: "watch-only",
+  };
+
+  // Only addresses already derived + persisted on the record are exposed — this
+  // never triggers derivation and never touches key material.
+  const addresses: SimplDashboardAccount["addresses"] = { evm: account.address };
+  if ("tronAddress" in account && account.tronAddress) addresses.tron = account.tronAddress;
+  if ("solanaAddress" in account && account.solanaAddress) addresses.solana = account.solanaAddress;
+  if ("tonAddress" in account && account.tonAddress) addresses.ton = account.tonAddress;
+  if ("bitcoinAddresses" in account && account.bitcoinAddresses) {
+    const mainnet = account.bitcoinAddresses[BITCOIN_MAINNET_CHAIN_ID];
+    const testnet = account.bitcoinAddresses[BITCOIN_TESTNET_CHAIN_ID];
+    if (mainnet?.receive) addresses.btc = mainnet.receive;
+    if (testnet?.receive) addresses.btcTestnet = testnet.receive;
+  }
+
+  return {
+    id: account.id,
+    name: account.label,
+    type: typeMap[account.type],
+    isActive: account.id === selectedAccountId,
+    avatarSeed: account.address,
+    addresses,
+  };
+}
+
+// Routes the wallet UI may be deep-linked to from a first-party surface. Opening
+// the wallet exposes no data, so this needs no connection — but the route is
+// allow-listed so an arbitrary value can't drive navigation.
+const WALLET_OPEN_ROUTES = new Set(["accounts", "settings", "home"]);
+
+async function openWalletToRoute(route: string): Promise<void> {
+  const safeRoute = WALLET_OPEN_ROUTES.has(route) ? route : "accounts";
+  const url = chrome.runtime.getURL(`popup.html?route=${encodeURIComponent(safeRoute)}`);
+  await chrome.windows.create({
+    url,
+    type: "popup",
+    width: 400,
+    height: 640,
+    focused: true,
+  });
+}
+
+async function broadcastProviderEvent(
+  event: string,
+  data: unknown,
+  namespace: "evm" | "tron" = "evm",
+): Promise<void> {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (tab.id !== undefined) {
-      chrome.tabs.sendMessage(tab.id, { type: "SIMPL_PROVIDER_EVENT", event, data }).catch(() => {});
+      chrome.tabs
+        .sendMessage(tab.id, { type: "SIMPL_PROVIDER_EVENT", event, data, namespace })
+        .catch(() => {});
     }
   }
 }
@@ -790,6 +1004,77 @@ async function handleDappRequest(
         return;
       }
 
+      // ── SIMPL first-party account methods ──────────────────────────────
+      // Richer account metadata + active-account switching + deep-linking the
+      // wallet UI. Used by the SIMPL dashboard. Gated on the same connect
+      // approval model as eth_* methods; never expose key material.
+
+      case "simpl_getAccounts": {
+        const connected = await getDappConnectionForOrigin(origin);
+        // Only a connected (approved) origin may see the full account list.
+        if (!connected) {
+          sendResponse({ ok: true, result: [] });
+          return;
+        }
+        const result = bootstrap.walletState.accounts.map((a) =>
+          toSafeAccountMeta(a, bootstrap.walletState.selectedAccountId),
+        );
+        sendResponse({ ok: true, result });
+        return;
+      }
+
+      // Switch the active signer account. `simpl_switchAccount` is the preferred
+      // name (accepts accountId); `simpl_setActiveAccount` is kept as an alias.
+      case "simpl_switchAccount":
+      case "simpl_setActiveAccount": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+        const param = message.params[0] as Record<string, unknown> | undefined;
+        const targetId =
+          typeof param?.["accountId"] === "string"
+            ? (param["accountId"] as string)
+            : typeof param?.["id"] === "string"
+              ? (param["id"] as string)
+              : null;
+        const targetAddress = typeof param?.["address"] === "string" ? (param["address"] as string) : null;
+        const match = bootstrap.walletState.accounts.find(
+          (a) =>
+            (targetId !== null && a.id === targetId) ||
+            (targetAddress !== null && a.address.toLowerCase() === targetAddress.toLowerCase()),
+        );
+        if (!match) {
+          sendResponse({ ok: false, error: { code: -32602, message: "Unknown account." } });
+          return;
+        }
+        // Already active — no-op success.
+        if (match.id === bootstrap.walletState.selectedAccountId) {
+          sendResponse({ ok: true, result: [match.address] });
+          return;
+        }
+        const { walletState: nextState, selectedAccount: nextSelected } =
+          await walletService.selectAccount({ accountId: match.id });
+        // Notify every connected dApp of the new active account (standard event),
+        // and push the full sanitized list so first-party surfaces live-update.
+        await broadcastProviderEvent("accountsChanged", [nextSelected.address]);
+        await broadcastProviderEvent(
+          "simpl_accountsChanged",
+          nextState.accounts.map((a) => toSafeAccountMeta(a, nextState.selectedAccountId)),
+        );
+        sendResponse({ ok: true, result: [nextSelected.address] });
+        return;
+      }
+
+      case "simpl_openWallet": {
+        const param = message.params[0] as Record<string, unknown> | undefined;
+        const route = typeof param?.["route"] === "string" ? (param["route"] as string) : "accounts";
+        await openWalletToRoute(route);
+        sendResponse({ ok: true, result: true });
+        return;
+      }
+
       default: {
         sendResponse({
           ok: false,
@@ -806,19 +1091,212 @@ async function handleDappRequest(
   }
 }
 
-// Route dApp RPC requests from content scripts.
+// =============================================================
+//  TRON Injected Provider (TronLink-compatible) — Connect MVP
+//  Requests arrive with namespace "tron" so they never collide
+//  with the EVM provider. Accounts are always TRON base58 (T...),
+//  never EVM 0x addresses. chainId is the TRON mainnet id.
+// =============================================================
+async function handleTronDappRequest(
+  message: { method: string; params: unknown[]; origin: string },
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
+  const { method, origin } = message;
+
+  // Resolve the selected account's TRON address (base58 + hex). Returns null
+  // when the wallet is locked or has no TRON-capable account.
+  const getInfo = () =>
+    walletService.getSelectedTronAccountInfo().catch(() => null);
+
+  try {
+    switch (method) {
+      // Silent: current accounts if already connected, else [].
+      case "tron_accounts":
+      case "eth_accounts": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: true, result: [] });
+          return;
+        }
+        const info = await getInfo();
+        sendResponse({ ok: true, result: info ? [info.base58] : [] });
+        return;
+      }
+
+      // Silent hydrate for window.tronWeb.defaultAddress — only when connected.
+      case "tron_getAccount": {
+        const connected = await getDappConnectionForOrigin(origin);
+        if (!connected) {
+          sendResponse({ ok: true, result: null });
+          return;
+        }
+        const info = await getInfo();
+        sendResponse({
+          ok: true,
+          result: info
+            ? { base58: info.base58, hex: info.hex, chainId: TRON_CHAIN_ID_HEX }
+            : null,
+        });
+        return;
+      }
+
+      case "tron_chainId":
+      case "eth_chainId": {
+        sendResponse({ ok: true, result: TRON_CHAIN_ID_HEX });
+        return;
+      }
+
+      case "net_version": {
+        sendResponse({ ok: true, result: String(TRON_MAINNET_CHAIN_ID) });
+        return;
+      }
+
+      case "tron_requestAccounts":
+      case "eth_requestAccounts": {
+        const info = await getInfo();
+
+        // Wallet locked / no TRON account — cannot show or return an address.
+        if (!info) {
+          sendResponse({
+            ok: false,
+            error: {
+              code: 4900,
+              message: "Wallet is locked. Please unlock SIMPL Wallet first.",
+            },
+          });
+          return;
+        }
+
+        // Already connected — return the TRON address immediately.
+        if (await getDappConnectionForOrigin(origin)) {
+          sendResponse({ ok: true, result: [info.base58] });
+          return;
+        }
+
+        // A connect approval for this origin is already open — EIP-1193 -32002.
+        for (const existing of pendingDappApprovals.values()) {
+          if (existing.origin === origin && existing.kind === "tron_connect") {
+            sendResponse({
+              ok: false,
+              error: {
+                code: -32002,
+                message: "A connection request is already pending. Open SIMPL to continue.",
+              },
+            });
+            return;
+          }
+        }
+
+        const approvalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(approvalId, {
+          id: approvalId,
+          origin,
+          kind: "tron_connect",
+          namespace: "tron",
+          tronAddress: info.base58,
+          tronAddressHex: info.hex,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(approvalId);
+        return;
+      }
+
+      // Return the connected account as a permission object if connected.
+      case "wallet_getPermissions":
+      case "tron_getPermissions": {
+        const connected = await getDappConnectionForOrigin(origin);
+        const info = connected ? await getInfo() : null;
+        sendResponse({
+          ok: true,
+          result: info
+            ? [
+                {
+                  parentCapability: "tron_accounts",
+                  caveats: [
+                    { type: "restrictReturnedAccounts", value: [info.base58] },
+                  ],
+                },
+              ]
+            : [],
+        });
+        return;
+      }
+
+      case "tron_signTransaction":
+      case "tron_sign": {
+        if (!(await getDappConnectionForOrigin(origin))) {
+          sendResponse({
+            ok: false,
+            error: { code: 4100, message: "Unauthorized. Connect the site first." },
+          });
+          return;
+        }
+
+        const info = await getInfo();
+        if (!info) {
+          sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+
+        const tx = message.params[0];
+        if (!tx || typeof tx !== "object") {
+          sendResponse({
+            ok: false,
+            error: { code: -32602, message: "Invalid TRON transaction." },
+          });
+          return;
+        }
+
+        const approvalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(approvalId, {
+          id: approvalId,
+          origin,
+          kind: "tron_sign",
+          namespace: "tron",
+          tronAddress: info.base58,
+          tronAddressHex: info.hex,
+          tronTransaction: tx,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(approvalId);
+        return;
+      }
+
+      default: {
+        sendResponse({
+          ok: false,
+          error: { code: 4200, message: `Method not supported: ${method}` },
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    sendResponse({
+      ok: false,
+      error: { code: -32603, message: getErrorMessage(err) },
+    });
+  }
+}
+
+// Route dApp RPC requests from content scripts. TRON-namespace requests go to
+// the TRON-specific handler; everything else uses the EVM handler.
 chrome.runtime.onMessage.addListener(
   (message: any, sender, sendResponse: (response: unknown) => void) => {
     if (message?.type !== "SIMPL_DAPP_REQUEST") return false;
 
-    void handleDappRequest(
-      {
-        method: message.method as string,
-        params: Array.isArray(message.params) ? (message.params as unknown[]) : [],
-        origin: (message.origin as string | undefined) ?? (sender.origin ?? sender.url ?? ""),
-      },
-      sendResponse,
-    );
+    const request = {
+      method: message.method as string,
+      params: Array.isArray(message.params) ? (message.params as unknown[]) : [],
+      origin: (message.origin as string | undefined) ?? (sender.origin ?? sender.url ?? ""),
+    };
+
+    if (message.namespace === "tron") {
+      void handleTronDappRequest(request, sendResponse);
+    } else {
+      void handleDappRequest(request, sendResponse);
+    }
 
     return true; // keep channel open for async response
   },
@@ -876,6 +1354,18 @@ chrome.runtime.onMessage.addListener(
                   },
                 }
               : {}),
+            // TRON connect/sign: override with the TRON base58 address and a
+            // TRON-Mainnet network label (the popup must never show a 0x addr).
+            ...(pending.namespace === "tron"
+              ? {
+                  address: pending.tronAddress ?? null,
+                  network: "TRON Mainnet",
+                  chainIdHex: TRON_CHAIN_ID_HEX,
+                  ...(pending.kind === "tron_sign"
+                    ? { tronTransaction: extractTronTxDisplay(pending.tronTransaction) }
+                    : {}),
+                }
+              : {}),
           },
         });
       })
@@ -917,6 +1407,21 @@ chrome.runtime.onMessage.addListener(
           pendingDappApprovals.delete(id);
           await saveDappConnection(pending.origin);
           pending.resolve([address]);
+        } else if (pending.kind === "tron_connect") {
+          pendingDappApprovals.delete(id);
+          await saveDappConnection(pending.origin, "tron");
+          pending.resolve(pending.tronAddress ? [pending.tronAddress] : []);
+          // Notify the TRON provider so window.tronWeb hydrates immediately.
+          await broadcastProviderEvent("connect", { chainId: TRON_CHAIN_ID_HEX }, "tron");
+          await broadcastProviderEvent("accountsChanged", pending.tronAddress ? [pending.tronAddress] : [], "tron");
+          await broadcastProviderEvent("chainChanged", { chainId: TRON_CHAIN_ID_HEX }, "tron");
+        } else if (pending.kind === "tron_sign") {
+          const signed = await walletService.signTronDappTransaction({
+            transaction: pending.tronTransaction,
+            password,
+          });
+          pendingDappApprovals.delete(id);
+          pending.resolve(signed);
         } else if (pending.kind === "personal_sign") {
           const result = await walletService.signSelectedPersonalMessage({
             params: pending.signingParams?.params ?? [],
@@ -959,9 +1464,14 @@ chrome.runtime.onMessage.addListener(
         }
       })
       .catch((err) => {
-        // connect and switch_chain have no retry — reject and clean up immediately.
-        // personal_sign, typed_data, and transaction keep pending alive for password retry.
-        if (pending.kind === "connect" || pending.kind === "switch_chain") {
+        // connect, tron_connect and switch_chain have no retry — reject and clean
+        // up immediately. personal_sign, typed_data, transaction and tron_sign
+        // keep pending alive for password retry.
+        if (
+          pending.kind === "connect" ||
+          pending.kind === "tron_connect" ||
+          pending.kind === "switch_chain"
+        ) {
           pendingDappApprovals.delete(id);
           pending.reject({ code: -32603, message: getErrorMessage(err) });
         }
