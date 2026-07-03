@@ -26,11 +26,15 @@ const steps: Step[] = [
   { name: "Endpoint inventory", cmd: "npm run --silent check:endpoints" },
   { name: "Proxy / provider secrets", cmd: "npm run --silent check:proxy" },
   { name: "Swap/bridge reliability", cmd: "npm run --silent check:trade" },
+  { name: "UI primitives / chain labels", cmd: "npm run --silent check:ui" },
+  { name: "Asset budget", cmd: "npm run --silent check:assets" },
   { name: "Privacy / storage / logs", cmd: "npm run --silent check:privacy" },
   { name: "Manifest release validation", cmd: "npm run --silent check:manifest" },
   { name: "dApp permission regression", cmd: "npm run --silent check:dapp" },
   { name: "Security smoke", cmd: "npm run --silent check:security" },
   { name: "Production build", cmd: "npm run --silent build" },
+  // Bundle budget reads dist/assets — must run AFTER the build above.
+  { name: "Bundle budget", cmd: "npm run --silent check:bundle" },
 ];
 
 console.log("========================================");

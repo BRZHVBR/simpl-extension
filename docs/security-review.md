@@ -153,12 +153,22 @@ See `docs/swap-bridge-reliability.md`, `docs/fee-enforcement-matrix.md`,
 - Error taxonomy normalizes provider errors to stable codes with safe messages
   (no raw tx/signature/key leakage).
 
+### Bundle performance, design system & UX polish (Stage 7)
+
+See `docs/performance-budget.md` + `docs/design-system.md`. Summary: heavy popup
+routes are lazy-loaded (App.js 645→262 kB; Home no longer pulls swap/bridge/WC
+code); the logo is 674→104 kB; junk `.DS_Store` removed; chain labels come from a
+registry-backed helper (unknown chains render safely); shared UI primitives +
+tokens centralize risk/approval styling with no emoji-as-icons. New `check:bundle`
+/ `check:assets` / `check:ui` gates. No core business/security logic changed.
+
 ### Automated release gate — `npm run check:release`
 
 Runs: `typecheck` · `check:i18n` · `check:walletconnect` · `check:permissions` ·
-`check:risk` · `check:endpoints` · `check:proxy` · `check:trade` · `check:privacy`
-· `check:manifest` · `check:dapp` · `check:security` · production `build`. Each
-sub-check fails the gate (exit 1) on regression:
+`check:risk` · `check:endpoints` · `check:proxy` · `check:trade` · `check:ui` ·
+`check:assets` · `check:privacy` · `check:manifest` · `check:dapp` ·
+`check:security` · production `build` · `check:bundle`. Each sub-check fails the
+gate (exit 1) on regression:
 
 | Check | Guards against |
 | --- | --- |
@@ -170,6 +180,9 @@ sub-check fails the gate (exit 1) on regression:
 | `check:endpoints` | an external host referenced in src that is not registered in the endpoint inventory; custom-RPC validator regressions |
 | `check:proxy` | production 0x calling `api.0x.org` directly / using a client-side key; LI.FI or Jupiter not defaulting to the Simpl gateway; fee matrix regressions (LI.FI not backend-authoritative, Pancake treated as monetized) |
 | `check:trade` | quote-model / fee-matrix / slippage / price-impact / preflight / error-taxonomy regressions; slippage clamp exceeding the absolute max; normalized errors leaking raw payload |
+| `check:ui` | UI primitive variants (button/alert/badge) regressions; chain-label helper not registry-backed or crashing on unknown chains |
+| `check:assets` | shipped image > 500 kB; `.DS_Store`/junk in static roots; missing extension icons |
+| `check:bundle` | popup main chunk over budget; a chunk exceeding the runaway ceiling (reads dist/ after build) |
 | `check:dapp` | `simpl_switchAccount`/`simpl_switchChain` bypassing approval; sensitive methods without an active-permission guard; missing account/chain/method scoping; revoke not removing access |
 
 ## ⚠️ Git history note (important)

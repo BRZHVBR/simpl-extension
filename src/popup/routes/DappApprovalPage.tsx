@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { t, useTranslation } from "../../i18n";
+import { formatChainBadge } from "../../core/networks/chain-display";
 
 // chrome is a global in extension pages
 declare const chrome: typeof globalThis extends { chrome: infer C } ? C : never;
@@ -84,14 +85,10 @@ function shortAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+// Chain labels come from the shared registry helper (chain-display.ts) — no
+// hardcoded per-screen subset. Unknown chains render safely as "Unknown network".
 function chainLabel(chainId: number): string {
-  const names: Record<number, string> = {
-    1: "Ethereum",
-    56: "BNB Smart Chain",
-    8453: "Base",
-    11155111: "Sepolia",
-  };
-  return names[chainId] ?? `Chain ${chainId}`;
+  return formatChainBadge(chainId);
 }
 
 function safeHostname(origin: string): string {

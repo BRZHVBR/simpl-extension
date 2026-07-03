@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { walletService } from "../core/wallet/wallet.service";
 import { applyThemePreference } from "../core/theme/theme";
 import { applyLocalePreference, t } from "../i18n";
@@ -7,32 +7,103 @@ import type { WalletRuntimeState } from "../core/wallet/wallet.types";
 import type { WalletState } from "../core/storage/storage.types";
 import type { WalletAssetBalance } from "../core/tokens/token-balance.service";
 
+// Critical path — eager (onboarding + unlock + Home load instantly).
 import { WelcomePage } from "./routes/WelcomePage";
 import { CreateWalletPage } from "./routes/CreateWalletPage";
 import { ImportWalletPage } from "./routes/ImportWalletPage";
 import { UnlockPage } from "./routes/UnlockPage";
 import { HomePage } from "./routes/HomePage";
-import { TransactionHistoryPage } from "./routes/TransactionHistoryPage";
-import { TransactionDetailsPage } from "./routes/TransactionDetailsPage";
 import type { TransactionHistoryItem } from "../core/transactions/transaction-history.service";
-import { AccountPage } from "./routes/AccountPage";
-import { AddAccountPage } from "./routes/AddAccountPage";
-import { AccountDetailsPage } from "./routes/AccountDetailsPage";
-import { AddWatchWalletPage } from "./routes/AddWatchWalletPage";
-import { ImportAccountPage } from "./routes/ImportAccountPage";
-import { AddCustomTokenPage } from "./routes/AddCustomTokenPage";
-import { SendPage } from "./routes/SendPage";
-import { RevealSeedPage } from "./routes/RevealSeedPage";
-import { RevealPrivateKeyPage } from "./routes/RevealPrivateKeyPage";
-import SeedBackupVerificationPage from "./routes/SeedBackupVerificationPage";
 import { parseBackupStatus, markSkipped, toSecuritySettingsPatch } from "../core/security/backup-status";
-import { SettingsPage } from "./routes/SettingsPage";
-import { ReceivePage } from "./routes/ReceivePage";
 import { openSidePanel } from "./surface-actions";
-import { SwapPage } from "./routes/SwapPage";
-import { BridgePage } from "./routes/BridgePage";
 import { isTronChainId } from "../core/networks/chain-registry";
+
+// Heavy / secondary routes — lazy so opening the popup (Home) does not eagerly
+// pull swap/bridge/multichain/QR/history code. Suspense + RouteErrorBoundary
+// wrap the render below. Approval windows are separate entry points and are
+// unaffected.
+const TransactionHistoryPage = lazy(() =>
+  import("./routes/TransactionHistoryPage").then((m) => ({ default: m.TransactionHistoryPage })),
+);
+const TransactionDetailsPage = lazy(() =>
+  import("./routes/TransactionDetailsPage").then((m) => ({ default: m.TransactionDetailsPage })),
+);
+const AccountPage = lazy(() => import("./routes/AccountPage").then((m) => ({ default: m.AccountPage })));
+const AddAccountPage = lazy(() => import("./routes/AddAccountPage").then((m) => ({ default: m.AddAccountPage })));
+const AccountDetailsPage = lazy(() =>
+  import("./routes/AccountDetailsPage").then((m) => ({ default: m.AccountDetailsPage })),
+);
+const AddWatchWalletPage = lazy(() =>
+  import("./routes/AddWatchWalletPage").then((m) => ({ default: m.AddWatchWalletPage })),
+);
+const ImportAccountPage = lazy(() =>
+  import("./routes/ImportAccountPage").then((m) => ({ default: m.ImportAccountPage })),
+);
+const AddCustomTokenPage = lazy(() =>
+  import("./routes/AddCustomTokenPage").then((m) => ({ default: m.AddCustomTokenPage })),
+);
+const SendPage = lazy(() => import("./routes/SendPage").then((m) => ({ default: m.SendPage })));
+const RevealSeedPage = lazy(() => import("./routes/RevealSeedPage").then((m) => ({ default: m.RevealSeedPage })));
+const RevealPrivateKeyPage = lazy(() =>
+  import("./routes/RevealPrivateKeyPage").then((m) => ({ default: m.RevealPrivateKeyPage })),
+);
+const SeedBackupVerificationPage = lazy(() => import("./routes/SeedBackupVerificationPage"));
+const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const ReceivePage = lazy(() => import("./routes/ReceivePage").then((m) => ({ default: m.ReceivePage })));
+const SwapPage = lazy(() => import("./routes/SwapPage").then((m) => ({ default: m.SwapPage })));
+const BridgePage = lazy(() => import("./routes/BridgePage").then((m) => ({ default: m.BridgePage })));
 import { LIFI_TRON_NATIVE_ADDRESS } from "../core/bridge/lifi-bridge.service";
+
+// Minimal simpl-style fallback while a lazy route chunk loads.
+function RouteFallback() {
+  return (
+    <div
+      className="route-fallback"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: 240,
+        width: "100%",
+        color: "var(--ink-3, #888)",
+        fontSize: 13,
+      }}
+      role="status"
+      aria-live="polite"
+    >
+      {t("common.loading")}
+    </div>
+  );
+}
+
+// Isolates a lazy chunk that fails to load (e.g. offline) so it never blanks the
+// whole popup; offers a reload of the extension surface.
+class RouteErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div style={{ padding: 24, textAlign: "center", color: "var(--ink-2)" }}>
+          <p style={{ fontSize: 14, fontWeight: 700, margin: "0 0 8px" }}>{t("errors.generic")}</p>
+          <button
+            type="button"
+            className="btn secondary lg"
+            onClick={() => window.location.reload()}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export type PopupRoute =
   | "welcome"
@@ -781,13 +852,17 @@ export function App() {
       {isFullscreen ? (
         <div className="fullscreen-shell">
           <main className="fullscreen-wallet-frame" data-route={route}>
-            {routeContent}
+            <RouteErrorBoundary>
+              <Suspense fallback={<RouteFallback />}>{routeContent}</Suspense>
+            </RouteErrorBoundary>
           </main>
         </div>
       ) : (
         <div className="popup-app-shell">
           <main className="popup-app-frame" data-route={route}>
-            {routeContent}
+            <RouteErrorBoundary>
+              <Suspense fallback={<RouteFallback />}>{routeContent}</Suspense>
+            </RouteErrorBoundary>
           </main>
         </div>
       )}

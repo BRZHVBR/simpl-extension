@@ -21,6 +21,9 @@ Runs, fail-fast, in order:
 | Endpoint inventory | `npm run check:endpoints` | unregistered external endpoint in src; custom-RPC validators |
 | Proxy / provider secrets | `npm run check:proxy` | production 0x direct/client-key; LI.FI/Jupiter proxy routing; fee matrix |
 | Swap/bridge reliability | `npm run check:trade` | quote model, fee matrix, slippage/price-impact, preflight, error taxonomy |
+| UI primitives / chain labels | `npm run check:ui` | primitive variants; registry-backed, unknown-safe chain labels |
+| Asset budget | `npm run check:assets` | oversized images, junk artifacts, extension icons |
+| Bundle budget | `npm run check:bundle` | popup main chunk + runaway-chunk budgets (after build) |
 | Privacy | `npm run check:privacy` | No raw WC payload storage, no hard-enabled debug flags, no secret logging |
 | Manifest | `npm run check:manifest` | No `<all_urls>` host_permissions, no unshipped `nativeMessaging`, docs present |
 | dApp permissions | `npm run check:dapp` | `simpl_switchAccount`/`switchChain` approval-gated; sensitive methods guarded; revoke works |
