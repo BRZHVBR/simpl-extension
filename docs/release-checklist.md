@@ -19,7 +19,8 @@ Runs, fail-fast, in order:
 | Permission model | `npm run check:permissions` | v1→v2 migration safety, scope predicates, grant/revoke/expiry, audit-log cap |
 | Backup / risk policy | `npm run check:risk` | backup-status classification + risk-policy (watch-only, locked, unsupported chain, unverified-mnemonic) |
 | Endpoint inventory | `npm run check:endpoints` | unregistered external endpoint in src; custom-RPC validators |
-| Proxy / provider secrets | `npm run check:proxy` | production 0x direct/client-key; LI.FI/Jupiter proxy routing |
+| Proxy / provider secrets | `npm run check:proxy` | production 0x direct/client-key; LI.FI/Jupiter proxy routing; fee matrix |
+| Swap/bridge reliability | `npm run check:trade` | quote model, fee matrix, slippage/price-impact, preflight, error taxonomy |
 | Privacy | `npm run check:privacy` | No raw WC payload storage, no hard-enabled debug flags, no secret logging |
 | Manifest | `npm run check:manifest` | No `<all_urls>` host_permissions, no unshipped `nativeMessaging`, docs present |
 | dApp permissions | `npm run check:dapp` | `simpl_switchAccount`/`switchChain` approval-gated; sensitive methods guarded; revoke works |

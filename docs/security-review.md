@@ -135,11 +135,29 @@ See `docs/endpoint-inventory.md` + `docs/custom-rpc-security.md`. Summary:
   only), block private/internal IP ranges, and reject malformed URLs. No
   add-network UI ships yet; the flow is specified for when it does.
 
+### Swap / bridge reliability, fees & failure states (Stage 6)
+
+See `docs/swap-bridge-reliability.md`, `docs/fee-enforcement-matrix.md`,
+`docs/trade-error-taxonomy.md`. Summary:
+
+- Normalized `SimplQuote` model (`src/core/trade/`) with fee breakdown, price
+  impact, slippage, quote expiry, minimum received, route, warnings and
+  simulation status — unknowns are explicit, never fabricated.
+- Fee enforcement matrix: 0x provider-enforced (via proxy in prod), LI.FI &
+  Jupiter backend-authoritative (client fee is a hint), Pancake fallback carries
+  no fee and must not be a silent monetized route.
+- Slippage policy: hard-max 5% (danger ack above), absolute-max 15% (the old
+  Pancake 50% clamp is removed); price-impact tiers (warn/danger/blocked).
+- Preflight aggregates every gate (lock/watch-only/risk/chain/balance/gas/
+  allowance/expiry/slippage/impact/simulation/bridge dest) before Confirm.
+- Error taxonomy normalizes provider errors to stable codes with safe messages
+  (no raw tx/signature/key leakage).
+
 ### Automated release gate — `npm run check:release`
 
 Runs: `typecheck` · `check:i18n` · `check:walletconnect` · `check:permissions` ·
-`check:risk` · `check:endpoints` · `check:proxy` · `check:privacy` ·
-`check:manifest` · `check:dapp` · `check:security` · production `build`. Each
+`check:risk` · `check:endpoints` · `check:proxy` · `check:trade` · `check:privacy`
+· `check:manifest` · `check:dapp` · `check:security` · production `build`. Each
 sub-check fails the gate (exit 1) on regression:
 
 | Check | Guards against |
@@ -150,7 +168,8 @@ sub-check fails the gate (exit 1) on regression:
 | `check:privacy` | raw WC proposal/request payload storage keys; `*_DEBUG = true`; secrets in `console.*` |
 | `check:manifest` | `<all_urls>` in `host_permissions`; missing/dead hosts; `host_permissions` diverging from the endpoint inventory; `nativeMessaging` without a host; missing permission/endpoint docs |
 | `check:endpoints` | an external host referenced in src that is not registered in the endpoint inventory; custom-RPC validator regressions |
-| `check:proxy` | production 0x calling `api.0x.org` directly / using a client-side key; LI.FI or Jupiter not defaulting to the Simpl gateway |
+| `check:proxy` | production 0x calling `api.0x.org` directly / using a client-side key; LI.FI or Jupiter not defaulting to the Simpl gateway; fee matrix regressions (LI.FI not backend-authoritative, Pancake treated as monetized) |
+| `check:trade` | quote-model / fee-matrix / slippage / price-impact / preflight / error-taxonomy regressions; slippage clamp exceeding the absolute max; normalized errors leaking raw payload |
 | `check:dapp` | `simpl_switchAccount`/`simpl_switchChain` bypassing approval; sensitive methods without an active-permission guard; missing account/chain/method scoping; revoke not removing access |
 
 ## ⚠️ Git history note (important)

@@ -24,6 +24,7 @@
     "check:risk": "tsx scripts/check-risk.ts",
     "check:endpoints": "tsx scripts/check-endpoints.ts",
     "check:proxy": "tsx scripts/check-proxy.ts",
+    "check:trade": "tsx scripts/check-trade.ts",
     "check:privacy": "tsx scripts/check-privacy.ts",
     "check:manifest": "tsx scripts/check-manifest.ts",
     "check:dapp": "tsx scripts/check-dapp-permissions.ts",
