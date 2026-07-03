@@ -107,7 +107,46 @@ Load the unpacked production build from `dist/` in `chrome://extensions`.
       signatures, or WC proposal/request payloads
 - [ ] No `nativeMessaging` prompt / permission
 
-## 3. Do NOT auto-merge / auto-publish
+## 3. CWS submission readiness (Stage 8)
+
+### Code readiness
+- [ ] `npm run typecheck`, `npm run check:i18n`, `npm run check:release` all green
+- [ ] Production build clean (`npm run build`)
+
+### Security readiness
+- [ ] WalletConnect explicit approval (no auto-approve); dApp connect/sign/tx approvals
+- [ ] Connected-site revoke removes access (per-site + WC session)
+- [ ] Seed backup enforcement (fresh mnemonic gated; migrated warned)
+- [ ] No sensitive logs in production (`npm run check:privacy`)
+- [ ] Endpoint inventory current; `host_permissions` == inventory (`npm run check:manifest`)
+
+### Store readiness
+- [ ] Manifest permissions justified (`docs/chrome-store-permissions.md`); no `nativeMessaging`; no `<all_urls>` host_permissions
+- [ ] Privacy policy published (`docs/privacy-policy.md`) and matches code
+- [ ] Listing copy finalized (`docs/store-listing.md`) — networks == registry, no overclaim
+- [ ] Screenshots captured per `docs/store-assets-plan.md` (test wallet, no seed/keys)
+- [ ] Reviewer notes ready (`docs/chrome-store-reviewer-notes.md`)
+- [ ] Package validated: `npm run check:store-docs`, `npm run check:package`, `npm run package:cws`
+- [ ] **Production build built WITHOUT `VITE_0X_API_KEY`** (proxy-only) so no provider key is inlined into the bundle
+
+### Manual QA (final pass — see `docs/manual-qa.md`)
+- [ ] Clean install · create wallet · backup verification · lock/unlock
+- [ ] Receive · send on testnet · dApp connect approve/reject · sign approve/reject
+- [ ] WalletConnect approve/reject · connected-sites revoke · swap quote · bridge quote
+- [ ] Custom RPC add/remove (when UI exists) · light/dark · popup 360×600 · side panel
+
+### Rollback plan
+- [ ] Keep the previous published version available to re-submit
+- [ ] Risky providers (0x/LI.FI/Jupiter routes) can be disabled via the Simpl API
+      gateway / env config without a client release
+- [ ] Hotfix path: patch on a branch → `check:release` → new CWS version
+
+### Post-release monitoring
+- [ ] Watch user reports / CWS reviews and crash/error signals
+- [ ] Monitor provider/RPC availability (swap/bridge/price gateway)
+- [ ] Track approval/permission complaints and revoke behavior
+
+## 4. Do NOT auto-merge / auto-publish
 
 Merge to `main` and Web Store submission are explicit human decisions after the
 above. See `docs/security-review.md` and `docs/chrome-store-permissions.md`.

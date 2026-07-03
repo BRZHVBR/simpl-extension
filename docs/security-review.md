@@ -166,9 +166,9 @@ tokens centralize risk/approval styling with no emoji-as-icons. New `check:bundl
 
 Runs: `typecheck` · `check:i18n` · `check:walletconnect` · `check:permissions` ·
 `check:risk` · `check:endpoints` · `check:proxy` · `check:trade` · `check:ui` ·
-`check:assets` · `check:privacy` · `check:manifest` · `check:dapp` ·
-`check:security` · production `build` · `check:bundle`. Each sub-check fails the
-gate (exit 1) on regression:
+`check:assets` · `check:store-docs` · `check:privacy` · `check:manifest` ·
+`check:dapp` · `check:security` · production `build` · `check:bundle` ·
+`check:package`. Each sub-check fails the gate (exit 1) on regression:
 
 | Check | Guards against |
 | --- | --- |
@@ -183,6 +183,8 @@ gate (exit 1) on regression:
 | `check:ui` | UI primitive variants (button/alert/badge) regressions; chain-label helper not registry-backed or crashing on unknown chains |
 | `check:assets` | shipped image > 500 kB; `.DS_Store`/junk in static roots; missing extension icons |
 | `check:bundle` | popup main chunk over budget; a chunk exceeding the runaway ceiling (reads dist/ after build) |
+| `check:store-docs` | listing/README claiming networks outside the registry; `nativeMessaging` described as active; unbacked "no sensitive logging" claims; missing release docs / privacy-policy sections |
+| `check:package` | source/.env/source-maps/junk, test seed phrases or PEM keys, remote code, forbidden permissions, or manifest/version mismatch in the built dist/ |
 | `check:dapp` | `simpl_switchAccount`/`simpl_switchChain` bypassing approval; sensitive methods without an active-permission guard; missing account/chain/method scoping; revoke not removing access |
 
 ## ⚠️ Git history note (important)

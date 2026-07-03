@@ -1,5 +1,9 @@
 # Chrome Web Store — Listing Draft
 
+> **Superseded by `docs/store-listing.md`** (the canonical, code-verified listing).
+> This earlier draft is kept for history; its network list has been corrected to
+> match `src/core/networks/chain-registry.ts`.
+
 Draft copy for the simpl Web Store listing. All claims are intentionally honest:
 no "official", "approved", "#1", or "best wallet" language, and no features that
 aren't shipped. Review before publishing and replace every `<placeholder>`.
@@ -23,9 +27,8 @@ simpl
 
 > simpl is a clean, self-custodial multi-chain crypto wallet for everyday Web3.
 >
-> Create or import a wallet and manage your assets across EVM chains (Ethereum,
-> Base, BNB Chain, Polygon, Arbitrum, Optimism, Avalanche), Solana, Bitcoin and
-> TRON — all from one minimal interface.
+> Create or import a wallet and manage your assets across Ethereum, BNB Chain,
+> Base, Solana, Bitcoin, TRON and TON — all from one minimal interface.
 >
 > Features:
 > • Create or import a wallet with a standard recovery phrase
