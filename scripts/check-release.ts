@@ -21,6 +21,7 @@ const steps: Step[] = [
   { name: "TypeScript typecheck", cmd: "npm run --silent typecheck" },
   { name: "i18n key parity", cmd: "npm run --silent check:i18n" },
   { name: "WalletConnect approval model", cmd: "npm run --silent check:walletconnect" },
+  { name: "Connected-site permission model", cmd: "npm run --silent check:permissions" },
   { name: "Privacy / storage / logs", cmd: "npm run --silent check:privacy" },
   { name: "Manifest release validation", cmd: "npm run --silent check:manifest" },
   { name: "dApp permission regression", cmd: "npm run --silent check:dapp" },

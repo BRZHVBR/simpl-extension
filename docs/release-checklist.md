@@ -15,7 +15,8 @@ Runs, fail-fast, in order:
 | --- | --- | --- |
 | Typecheck | `npm run typecheck` | Type safety |
 | i18n | `npm run check:i18n` | All 8 locales key-complete |
-| WalletConnect approval | `npm run check:walletconnect` | Explicit-approval model (no auto-approve, no connect-before-approve, allowlist, approve/reject clear pending) |
+| WalletConnect approval | `npm run check:walletconnect` | Explicit-approval model (no auto-approve, no connect-before-approve, allowlist, approve/reject clear pending, WC sessions stored/guarded as scoped permissions) |
+| Permission model | `npm run check:permissions` | v1→v2 migration safety, scope predicates, grant/revoke/expiry, audit-log cap |
 | Privacy | `npm run check:privacy` | No raw WC payload storage, no hard-enabled debug flags, no secret logging |
 | Manifest | `npm run check:manifest` | No `<all_urls>` host_permissions, no unshipped `nativeMessaging`, docs present |
 | dApp permissions | `npm run check:dapp` | `simpl_switchAccount`/`switchChain` approval-gated; sensitive methods guarded; revoke works |
@@ -39,12 +40,21 @@ Load the unpacked production build from `dist/` in `chrome://extensions`.
 
 ### dApp (injected provider)
 - [ ] Connect from a dApp → approval popup; **Approve** connects, **Reject** does not
+- [ ] `eth_accounts` returns only the granted account(s), not the whole wallet
 - [ ] After connect, `personal_sign` / `eth_signTypedData_v4` open an approval; reject blocks
 - [ ] `eth_sendTransaction` opens an approval with correct to/value/network
 - [ ] Chain switch request → approval; account only switches after confirm
 - [ ] Account switch request (`simpl_switchAccount`) → approval; no silent switch
 - [ ] Revoke the site in Connected Sites → dApp can no longer sign/send until it
       reconnects (and reconnect requires approval again)
+
+### Connected Sites & permissions
+- [ ] Existing (pre-upgrade) sites show with **no permissions**; first
+      `eth_requestAccounts` re-prompts a scoped connect (v1→v2 migration)
+- [ ] Each site shows source (Browser dApp / WalletConnect), accounts, networks,
+      permissions (grouped), last used, and expiry (WC)
+- [ ] Details expands the full account/network/permission breakdown + risk note
+- [ ] Revoke all disconnects every site (incl. live WalletConnect sessions)
 
 ### WalletConnect
 - [ ] Pair via URI → approval window shows peer name/url + requested chains/methods

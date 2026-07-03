@@ -86,6 +86,12 @@ type WalletSnapshot = {
 
 const CONNECTED_SITES_KEY = "connectedSites";
 const PENDING_WALLETCONNECT_REQUEST_KEY = "pendingWalletConnectRequest";
+import {
+  migrateConnectedSites,
+  isPermissionActive,
+  revokeConnectedSitePermission,
+  type ConnectedSitePermission,
+} from "../../core/permissions/connected-site-permissions";
 
 const PAIR_TIMEOUT_MS = 30_000;
 
@@ -359,23 +365,27 @@ function safeParseConnectedSites(value: unknown): ConnectedSite[] {
   return sites;
 }
 
-async function readConnectedSites(): Promise<ConnectedSite[]> {
+// Read the versioned permission model (active grants only). Returning v2
+// permissions here — and writing them back verbatim — ensures the sessions list
+// / disconnect in this page never downgrades the scoped connectedSites schema.
+async function readConnectedSites(): Promise<ConnectedSitePermission[]> {
+  const now = new Date().toISOString();
   const stored = await chromeStorageGet(CONNECTED_SITES_KEY);
-  const fromChrome = safeParseConnectedSites(stored[CONNECTED_SITES_KEY]);
+  let raw = stored[CONNECTED_SITES_KEY];
 
-  if (fromChrome.length > 0) {
-    return fromChrome;
+  if (!Array.isArray(raw)) {
+    try {
+      const ls = localStorage.getItem(CONNECTED_SITES_KEY);
+      raw = ls ? JSON.parse(ls) : [];
+    } catch {
+      raw = [];
+    }
   }
 
-  try {
-    const raw = localStorage.getItem(CONNECTED_SITES_KEY);
-    return safeParseConnectedSites(raw ? JSON.parse(raw) : []);
-  } catch {
-    return [];
-  }
+  return migrateConnectedSites(raw, now).filter((p) => isPermissionActive(p, Date.now()));
 }
 
-async function writeConnectedSites(sites: ConnectedSite[]) {
+async function writeConnectedSites(sites: ConnectedSitePermission[]) {
   await chromeStorageSet({
     [CONNECTED_SITES_KEY]: sites,
   });
@@ -385,24 +395,6 @@ async function writeConnectedSites(sites: ConnectedSite[]) {
   } catch {
     // Local storage can be unavailable in some extension surfaces.
   }
-}
-
-async function saveConnectedSite(site: ConnectedSite) {
-  const currentSites = await readConnectedSites();
-  const now = new Date().toISOString();
-
-  const nextSite: ConnectedSite = {
-    ...site,
-    connectedAt: site.connectedAt ?? now,
-    lastUsedAt: now,
-  };
-
-  const nextSites = [
-    nextSite,
-    ...currentSites.filter((item) => item.id !== nextSite.id && item.origin !== nextSite.origin),
-  ];
-
-  await writeConnectedSites(nextSites);
 }
 
 function normalizeOrigin(value?: string): string {
@@ -1562,7 +1554,7 @@ export default function WalletConnectPage({
   const [pendingRequest, setPendingRequest] = useState<WalletConnectPendingRequest | null>(null);
   const [isResponding, setIsResponding] = useState(false);
   const [approvalPassword, setApprovalPassword] = useState("");
-  const [sessions, setSessions] = useState<ConnectedSite[]>([]);
+  const [sessions, setSessions] = useState<ConnectedSitePermission[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
 
   const site = useMemo(() => {
@@ -1617,9 +1609,17 @@ export default function WalletConnectPage({
 
   async function disconnectSession(id: string) {
     const current = await readConnectedSites();
-    const next = current.filter((site) => site.id !== id && site.origin !== id);
+    const target = current.find((site) => site.id === id || site.origin === id);
+    const next = revokeConnectedSitePermission(current, { id });
     await writeConnectedSites(next);
     setSessions(next);
+    // Tear down the live WalletConnect session too.
+    if (target?.source === "walletconnect" && target.topic) {
+      void sendWalletConnectEngineMessage({
+        type: "SIMPLE_WALLETCONNECT_DISCONNECT_SESSION",
+        topic: target.topic,
+      }).catch(() => {});
+    }
   }
 
   // The offscreen engine processes (and auto-approves or rejects) the session
@@ -2690,9 +2690,9 @@ export default function WalletConnectPage({
                     borderTop: index === 0 ? "none" : "1px solid var(--border, var(--bg-muted))",
                   }}
                 >
-                  {session.iconUrl ? (
+                  {session.icon ? (
                     <img
-                      src={session.iconUrl}
+                      src={session.icon}
                       alt=""
                       width={36}
                       height={36}

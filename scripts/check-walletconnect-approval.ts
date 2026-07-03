@@ -216,6 +216,38 @@ check(
     !/saveConnectedSiteFromProposal/.test(rejectFn),
 );
 
+// ── WalletConnect sessions as scoped permissions (Stage 3) ──────────────────
+console.log("\nWalletConnect scoped-permission mapping:");
+check(
+  "approve records a WalletConnect-source permission via grantConnectedSitePermission",
+  /grantConnectedSitePermission[\s\S]{0,200}source:\s*"walletconnect"/.test(offscreenSrc),
+);
+const sessionReqBody = offscreenSrc.slice(
+  offscreenSrc.indexOf('walletKit.on("session_request"'),
+  offscreenSrc.indexOf('walletKit.on("session_delete"'),
+);
+check(
+  "session_request looks up the permission by topic",
+  /findByTopic/.test(sessionReqBody),
+);
+check(
+  "session_request enforces active + method (+ chain) permission",
+  /isPermissionActive/.test(sessionReqBody) &&
+    /hasMethodPermission/.test(sessionReqBody),
+);
+check(
+  "session_request rejects an unpermitted request (4100) instead of prompting",
+  /!permitted[\s\S]{0,200}4100/.test(sessionReqBody),
+);
+check(
+  "session_delete revokes the topic's permission",
+  /session_delete[\s\S]{0,800}revokeConnectedSitePermission/.test(offscreenSrc),
+);
+check(
+  "engine exposes a disconnect-session handler",
+  offscreenSrc.includes("SIMPLE_WALLETCONNECT_DISCONNECT_SESSION"),
+);
+
 console.log("");
 if (failures > 0) {
   console.log(`WALLETCONNECT APPROVAL CHECK FAILED — ${failures} failing check(s)`);

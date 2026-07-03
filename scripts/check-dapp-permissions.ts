@@ -88,26 +88,61 @@ if (switchChainSlice.length === 0) {
     !/walletService\.setSelectedChainId/.test(switchChainSlice));
 }
 
-// ── sensitive methods are connection-guarded ────────────────────────────────
-console.log("\nSensitive dApp methods are connection-guarded:");
-for (const method of ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4", "simpl_getAccounts"]) {
+// ── sensitive methods require an active permission ──────────────────────────
+console.log("\nSensitive dApp methods require an active permission:");
+for (const method of ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4"]) {
   const slice = caseSlice(method);
-  check(`${method} checks getDappConnectionForOrigin`, /getDappConnectionForOrigin/.test(slice));
+  check(
+    `${method} resolves an active permission (getActiveOriginPermission)`,
+    /getActiveOriginPermission/.test(slice),
+  );
 }
+check(
+  "simpl_getAccounts is connection-guarded",
+  /getDappConnectionForOrigin/.test(caseSlice("simpl_getAccounts")),
+);
+
+// ── permission scoping (account / chain / method) ───────────────────────────
+console.log("\nPermission scoping:");
+const acctsSlice = caseSlice("eth_accounts");
+check(
+  "eth_accounts returns only permitted addresses (getPermittedAddresses), never the raw selected address",
+  /getPermittedAddresses/.test(acctsSlice) && !/result:\s*connected\s*&&\s*address/.test(acctsSlice),
+);
+const reqAcctsSlice = caseSlice("eth_requestAccounts");
+check("eth_requestAccounts gates on an active permission", /getActiveOriginPermission/.test(reqAcctsSlice));
+for (const method of ["personal_sign", "eth_signTypedData_v4"]) {
+  const slice = caseSlice(method);
+  check(`${method} checks method + account permission`,
+    /hasMethodPermission/.test(slice) && /hasAccountPermission/.test(slice));
+}
+const sendSlice = caseSlice("eth_sendTransaction");
+check("eth_sendTransaction checks method + chain + account permission",
+  /hasMethodPermission/.test(sendSlice) && /hasChainPermission/.test(sendSlice) && /hasAccountPermission/.test(sendSlice));
+check("connect approval grants a scoped permission",
+  /grantInjectedEvmPermission|grantConnectedSitePermission/.test(sw));
 
 // ── revoke removes access ────────────────────────────────────────────────────
 console.log("\nRevoke:");
 check(
-  "getDappConnectionForOrigin gates on the connectedSites store",
-  /function getDappConnectionForOrigin[\s\S]{0,300}connectedSites/.test(sw),
+  "presence guard resolves an active permission (getActiveOriginPermission)",
+  /function getDappConnectionForOrigin[\s\S]{0,200}getActiveOriginPermission/.test(sw),
+);
+check(
+  "readPermissions is backed by the connectedSites store (migrated)",
+  /function readPermissions[\s\S]{0,300}connectedSites[\s\S]{0,120}migrateConnectedSites/.test(sw),
 );
 const connectedSitesPagePath = resolve(root, "src/popup/routes/ConnectedSitesPage.tsx");
 check("ConnectedSitesPage exists", existsSync(connectedSitesPagePath));
 if (existsSync(connectedSitesPagePath)) {
   const page = readFileSync(connectedSitesPagePath, "utf8");
   check(
-    "disconnectSite removes the origin from connectedSites",
-    /disconnectSite[\s\S]{0,200}filter\(/.test(page),
+    "disconnectSite removes the site + writes connectedSites",
+    /disconnectSite[\s\S]{0,260}writeConnectedSites/.test(page),
+  );
+  check(
+    "revoke of a WalletConnect site disconnects the session by topic",
+    /SIMPLE_WALLETCONNECT_DISCONNECT_SESSION/.test(page),
   );
   check("disconnectAll clears connections", /disconnectAll/.test(page));
 }

@@ -1,31 +1,48 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { t, useTranslation } from "../../i18n";
 import WalletConnectPage from "./WalletConnectPage";
-type ConnectedSiteType = "evm" | "tron" | "walletconnect";
+import {
+  migrateConnectedSites,
+  isPermissionActive,
+  type ConnectedSitePermission,
+} from "../../core/permissions/connected-site-permissions";
 
-type ConnectedSite = {
-  id: string;
-  origin: string;
-  name?: string;
-  iconUrl?: string;
-  type?: ConnectedSiteType;
-  connectedAt?: string;
-  lastUsedAt?: string;
-};
+// The page renders the versioned permission model directly.
+type ConnectedSite = ConnectedSitePermission;
 
-function siteTypeBadge(type: ConnectedSiteType | undefined): {
-  label: string;
-  bg: string;
-  fg: string;
-} {
-  if (type === "tron") {
-    return { label: "TRON", bg: "var(--danger-soft)", fg: "var(--danger)" };
+function sourceBadge(perm: ConnectedSitePermission): { label: string; bg: string; fg: string } {
+  if (perm.source === "walletconnect") {
+    return { label: t("connectedSites.sourceWalletConnect"), bg: "var(--info-soft)", fg: "var(--info)" };
   }
-  if (type === "walletconnect") {
-    return { label: "WalletConnect", bg: "var(--info-soft)", fg: "var(--info)" };
+  return { label: t("connectedSites.sourceBrowser"), bg: "var(--line)", fg: "var(--ink-2)" };
+}
+
+function shortAddress(addr: string): string {
+  return addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
+}
+
+// Human-readable, grouped permission labels for the method list. Keeps the UI
+// premium/legible instead of dumping raw RPC method names.
+function permissionGroups(methods: string[]): string[] {
+  const groups: string[] = [];
+  const has = (m: string) => methods.includes(m);
+  if (has("eth_accounts") || has("eth_requestAccounts") || has("tron_accounts")) {
+    groups.push(t("connectedSites.permView"));
   }
-  return { label: "EVM", bg: "var(--line)", fg: "var(--ink-2)" };
+  if (has("personal_sign") || has("eth_signTypedData_v4") || has("tron_sign") || has("tron_signMessage")) {
+    groups.push(t("connectedSites.permSign"));
+  }
+  if (has("eth_sendTransaction") || has("tron_sendTransaction")) {
+    groups.push(t("connectedSites.permSend"));
+  }
+  if (has("wallet_switchEthereumChain")) {
+    groups.push(t("connectedSites.permSwitch"));
+  }
+  if (has("wallet_watchAsset")) {
+    groups.push(t("connectedSites.permToken"));
+  }
+  return groups;
 }
 
 type ConnectedSitesPageProps = {
@@ -129,77 +146,36 @@ function chromeStorageSet(items: Record<string, unknown>): Promise<void> {
   });
 }
 
-function safeParseConnectedSites(value: unknown): ConnectedSite[] {
-  if (!Array.isArray(value)) {
-    return [];
+// Fire-and-forget message to the offscreen WalletConnect engine (disconnect).
+function sendRuntimeMessage(message: Record<string, unknown>): void {
+  const runtime = (globalThis as unknown as {
+    chrome?: { runtime?: { sendMessage?: (m: unknown, cb?: () => void) => void; lastError?: unknown } };
+  }).chrome?.runtime;
+  try {
+    runtime?.sendMessage?.(message, () => {
+      void runtime?.lastError;
+    });
+  } catch {
+    // ignore
   }
-
-  const sites: ConnectedSite[] = [];
-
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      continue;
-    }
-
-    const record = item as Record<string, unknown>;
-    const origin = typeof record.origin === "string" ? record.origin.trim() : "";
-
-    if (!origin) {
-      continue;
-    }
-
-    const site: ConnectedSite = {
-      id:
-        typeof record.id === "string" && record.id.trim()
-          ? record.id
-          : origin,
-      origin,
-    };
-
-    if (typeof record.name === "string" && record.name.trim()) {
-      site.name = record.name;
-    }
-
-    if (typeof record.iconUrl === "string" && record.iconUrl.trim()) {
-      site.iconUrl = record.iconUrl;
-    }
-
-    if (
-      record.type === "evm" ||
-      record.type === "tron" ||
-      record.type === "walletconnect"
-    ) {
-      site.type = record.type;
-    }
-
-    if (typeof record.connectedAt === "string" && record.connectedAt.trim()) {
-      site.connectedAt = record.connectedAt;
-    }
-
-    if (typeof record.lastUsedAt === "string" && record.lastUsedAt.trim()) {
-      site.lastUsedAt = record.lastUsedAt;
-    }
-
-    sites.push(site);
-  }
-
-  return sites;
 }
 
 async function readConnectedSites(): Promise<ConnectedSite[]> {
+  const now = new Date().toISOString();
   const stored = await chromeStorageGet(CONNECTED_SITES_KEY);
-  const fromChrome = safeParseConnectedSites(stored[CONNECTED_SITES_KEY]);
+  let raw = stored[CONNECTED_SITES_KEY];
 
-  if (fromChrome.length > 0) {
-    return fromChrome;
+  if (!Array.isArray(raw)) {
+    try {
+      const ls = localStorage.getItem(CONNECTED_SITES_KEY);
+      raw = ls ? JSON.parse(ls) : [];
+    } catch {
+      raw = [];
+    }
   }
 
-  try {
-    const raw = localStorage.getItem(CONNECTED_SITES_KEY);
-    return safeParseConnectedSites(raw ? JSON.parse(raw) : []);
-  } catch {
-    return [];
-  }
+  // Migrate to the v2 permission model and show only active grants.
+  return migrateConnectedSites(raw, now).filter((p) => isPermissionActive(p, Date.now()));
 }
 
 async function writeConnectedSites(sites: ConnectedSite[]) {
@@ -245,17 +221,64 @@ function getSiteLabel(site: ConnectedSite): string {
   }
 }
 
+function networkLabels(perm: ConnectedSitePermission): string[] {
+  return perm.chains.map((c) => c.label ?? c.chainId);
+}
+
+function Chip({ children, tone }: { children: ReactNode; tone: "strong" | "subtle" }) {
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        lineHeight: "14px",
+        fontWeight: 700,
+        padding: "3px 8px",
+        borderRadius: 999,
+        background: tone === "strong" ? "var(--line)" : "transparent",
+        border: tone === "subtle" ? "1px solid var(--border, var(--line))" : "0",
+        color: "var(--text-secondary, var(--ink-2))",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function DetailBlock({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+          color: "var(--text-secondary, var(--ink-3))",
+          marginBottom: 2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 12, lineHeight: "16px", color: "var(--text-primary, var(--ink-1))" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) {
   const { t } = useTranslation();
   const [sites, setSites] = useState<ConnectedSite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
   const [showWalletConnect, setShowWalletConnect] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const sortedSites = useMemo(() => {
     return [...sites].sort((left, right) => {
-      const leftTime = left.lastUsedAt ?? left.connectedAt ?? "";
-      const rightTime = right.lastUsedAt ?? right.connectedAt ?? "";
+      const leftTime = left.lastUsedAt ?? left.createdAt ?? "";
+      const rightTime = right.lastUsedAt ?? right.createdAt ?? "";
 
       return rightTime.localeCompare(leftTime);
     });
@@ -273,16 +296,27 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
   }
 
   async function disconnectSite(siteId: string) {
+    const target = sites.find((site) => site.id === siteId);
     const nextSites = sites.filter((site) => site.id !== siteId);
 
     setSites(nextSites);
     await writeConnectedSites(nextSites);
+    // WalletConnect sites also tear down the live session by topic.
+    if (target?.source === "walletconnect" && target.topic) {
+      sendRuntimeMessage({ type: "SIMPLE_WALLETCONNECT_DISCONNECT_SESSION", topic: target.topic });
+    }
   }
 
   async function disconnectAll() {
     setConfirmDisconnectAll(false);
+    const wcTopics = sites
+      .filter((s) => s.source === "walletconnect" && s.topic)
+      .map((s) => s.topic as string);
     setSites([]);
     await writeConnectedSites([]);
+    for (const topic of wcTopics) {
+      sendRuntimeMessage({ type: "SIMPLE_WALLETCONNECT_DISCONNECT_SESSION", topic });
+    }
   }
 
   useEffect(() => {
@@ -508,9 +542,9 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
                       overflow: "hidden",
                     }}
                   >
-                    {site.iconUrl ? (
+                    {site.icon ? (
                       <img
-                        src={site.iconUrl}
+                        src={site.icon}
                         alt=""
                         style={{
                           width: "100%",
@@ -546,7 +580,7 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
                       </span>
 
                       {(() => {
-                        const badge = siteTypeBadge(site.type);
+                        const badge = sourceBadge(site);
                         return (
                           <span
                             style={{
@@ -592,7 +626,92 @@ export default function ConnectedSitesPage({ onBack }: ConnectedSitesPageProps) 
                       {t("connectedSites.lastUsed", {
                         date: formatDate(site.lastUsedAt),
                       })}
+                      {site.expiresAt
+                        ? ` · ${t("connectedSites.expiresLabel", { date: formatDate(site.expiresAt) })}`
+                        : ""}
                     </div>
+
+                    {/* Scoped-permission summary */}
+                    {site.methods.length === 0 ? (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 12,
+                          lineHeight: "16px",
+                          color: "var(--warn, var(--danger))",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {t("connectedSites.needsReconnect")}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {site.accounts.slice(0, 1).map((a) => (
+                          <Chip key={a.accountId} tone="strong">
+                            {a.label ?? shortAddress(a.address)}
+                          </Chip>
+                        ))}
+                        {site.accounts.length > 1 ? (
+                          <Chip tone="subtle">{`+${site.accounts.length - 1}`}</Chip>
+                        ) : null}
+                        {networkLabels(site).slice(0, 2).map((n) => (
+                          <Chip key={n} tone="subtle">
+                            {n}
+                          </Chip>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setExpandedId(expandedId === site.id ? null : site.id)}
+                          style={{
+                            border: 0,
+                            background: "transparent",
+                            padding: 0,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: "var(--accent, var(--info))",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {expandedId === site.id
+                            ? t("connectedSites.detailsHide")
+                            : t("connectedSites.detailsShow")}
+                        </button>
+                      </div>
+                    )}
+
+                    {expandedId === site.id ? (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: 12,
+                          borderRadius: 12,
+                          background: "var(--bg-muted, var(--line))",
+                          display: "grid",
+                          gap: 10,
+                        }}
+                      >
+                        <DetailBlock label={t("connectedSites.accountsLabel")}>
+                          {site.accounts.length
+                            ? site.accounts.map((a) => a.label ?? shortAddress(a.address)).join(", ")
+                            : "—"}
+                        </DetailBlock>
+                        <DetailBlock label={t("connectedSites.networksLabel")}>
+                          {networkLabels(site).join(", ") || "—"}
+                        </DetailBlock>
+                        <DetailBlock label={t("connectedSites.permissionsLabel")}>
+                          {permissionGroups(site.methods).join(", ") || "—"}
+                        </DetailBlock>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            lineHeight: "15px",
+                            color: "var(--text-secondary, var(--ink-3))",
+                          }}
+                        >
+                          {t("connectedSites.riskNote")}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <button

@@ -84,18 +84,36 @@ P0 fix + hardening, with automated regression coverage:
   wallet-global state silently — both route through the approval popup.
 - **Manifest:** `<all_urls>` and `nativeMessaging` removed (items C/D above).
 
+### Connected-Sites permission model (`feat/wc-explicit-approval-security`, Stage 3)
+
+Connected sites now hold an explicit, versioned (v2) permission — scoped
+accounts / chains / methods with created/used/expiry timestamps and revocation.
+See `docs/connected-sites-permissions.md`. Highlights:
+
+- `eth_accounts` returns only granted accounts; signing/sending checks
+  method + account (+ chain) permission on top of the per-action approval.
+- WalletConnect sessions are stored as scoped permissions keyed by topic;
+  `session_request` is rejected unless the topic holds an active permission for
+  the method/chain. Revoke disconnects the session by topic; session
+  delete/expire revokes the permission.
+- Legacy v1 records migrate to v2 with **empty** scopes (re-approval over silent
+  broad grant).
+- A capped, local-only audit trail (`permissionAuditLog`) records connect/revoke/
+  approve/reject events with only public identifiers.
+
 ### Automated release gate — `npm run check:release`
 
-Runs: `typecheck` · `check:i18n` · `check:walletconnect` · `check:privacy` ·
-`check:manifest` · `check:dapp` · `check:security` · production `build`. Each
-sub-check fails the gate (exit 1) on regression:
+Runs: `typecheck` · `check:i18n` · `check:walletconnect` · `check:permissions` ·
+`check:privacy` · `check:manifest` · `check:dapp` · `check:security` · production
+`build`. Each sub-check fails the gate (exit 1) on regression:
 
 | Check | Guards against |
 | --- | --- |
-| `check:walletconnect` | WC auto-approve; connectedSites written before approve; unsupported required method/chain; unfiltered optional methods; approve/reject not clearing pending |
+| `check:walletconnect` | WC auto-approve; connectedSites written before approve; unsupported required method/chain; unfiltered optional methods; approve/reject not clearing pending; WC session not stored/guarded as a scoped permission |
+| `check:permissions` | v1→v2 migration granting broad access; broken scope predicates / grant / revoke / expiry; uncapped audit log |
 | `check:privacy` | raw WC proposal/request payload storage keys; `*_DEBUG = true`; secrets in `console.*` |
 | `check:manifest` | `<all_urls>` in `host_permissions`; missing/dead hosts; `nativeMessaging` without a host; missing permission/endpoint docs |
-| `check:dapp` | `simpl_switchAccount`/`simpl_switchChain` bypassing approval; sensitive methods without a connection guard; revoke not removing access |
+| `check:dapp` | `simpl_switchAccount`/`simpl_switchChain` bypassing approval; sensitive methods without an active-permission guard; missing account/chain/method scoping; revoke not removing access |
 
 ## ⚠️ Git history note (important)
 
