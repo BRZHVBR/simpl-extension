@@ -113,13 +113,35 @@ async function openWalletConnectApprovalWindow() {
     ...(typeof top === "number" ? { top } : {}),
   });
 
+  // Track the window so closing it without acting cleans up pending WC state.
+  walletConnectApprovalWindowId = createdWindow?.id ?? null;
+
   return createdWindow?.id;
 }
 
-chrome.windows?.onRemoved?.addListener((windowId) => {
-  if (walletConnectApprovalWindowId === windowId) {
-    walletConnectApprovalWindowId = null;
+// Fire-and-forget message to the offscreen engine (no service-worker handler).
+function notifyWalletConnectEngine(type: string): void {
+  try {
+    chrome.runtime.sendMessage({ type }, () => {
+      void chrome.runtime.lastError?.message;
+    });
+  } catch {
+    // Offscreen document may be gone; nothing to clean up.
   }
+}
+
+chrome.windows?.onRemoved?.addListener((windowId) => {
+  if (walletConnectApprovalWindowId !== windowId) {
+    return;
+  }
+
+  walletConnectApprovalWindowId = null;
+
+  // The approval window was closed. If the user closed it WITHOUT approving,
+  // reject any still-pending proposal/request so no session is created and the
+  // dApp is not left hanging. Both are no-ops if approval already cleared them.
+  notifyWalletConnectEngine("SIMPLE_WALLETCONNECT_REJECT_PROPOSAL");
+  notifyWalletConnectEngine("SIMPLE_WALLETCONNECT_REJECT_REQUEST");
 });
 
 chrome.runtime.onMessage.addListener(
@@ -144,14 +166,6 @@ chrome.runtime.onMessage.addListener(
     void walletService
       .setSelectedChainId(chainId)
       .then((walletState) => {
-        void chrome.storage.local.set({
-          lastWalletConnectSelectedChainSwitch: {
-            chainId,
-            selectedChainId: walletState.selectedChainId,
-            createdAt: new Date().toISOString(),
-          },
-        });
-
         sendResponse({
           ok: true,
           result: {
@@ -491,6 +505,7 @@ type DappPendingApproval = {
     | "personal_sign"
     | "typed_data"
     | "switch_chain"
+    | "switch_account"
     | "transaction"
     | "tron_connect"
     | "tron_sign";
@@ -498,6 +513,9 @@ type DappPendingApproval = {
   namespace?: "evm" | "tron";
   signingParams?: { method: string; params: unknown[] };
   switchChainId?: number;
+  // Target account for an explicit-approval simpl_switchAccount request.
+  switchAccountId?: string;
+  switchAccountAddress?: string;
   transactionParams?: {
     from: string;
     to: string;
@@ -955,6 +973,87 @@ async function handleDappRequest(
         return;
       }
 
+      // First-party network switch for SIMPL surfaces (e.g. the dashboard).
+      // Namespace-agnostic: works for EVM and non-EVM chains alike, and routes
+      // through the SAME approval popup as wallet_switchEthereumChain — so the
+      // dashboard never opens a standalone wallet window. A locked wallet is
+      // unlocked inside that approval popup before the switch is applied.
+      case "simpl_switchChain": {
+        const rawChainId = (message.params[0] as Record<string, unknown> | undefined)?.chainId;
+        // Accept a numeric chainId (or hex/decimal string) in params[0].chainId.
+        const requestedChainId =
+          typeof rawChainId === "number"
+            ? rawChainId
+            : typeof rawChainId === "string"
+              ? Number.parseInt(rawChainId, rawChainId.startsWith("0x") ? 16 : 10)
+              : Number.NaN;
+
+        const connected = await getDappConnectionForOrigin(origin);
+        const matchedChain = Number.isFinite(requestedChainId) ? getChainById(requestedChainId) : null;
+
+        if (import.meta.env.DEV) {
+          console.debug("[simpl:bg] simpl_switchChain", {
+            origin,
+            rawChainId,
+            rawChainIdType: typeof rawChainId,
+            requestedChainId,
+            matchedChain: matchedChain
+              ? { chainId: matchedChain.chainId, family: matchedChain.family, name: matchedChain.name }
+              : null,
+            selectedChainId: chainId,
+            connected,
+          });
+        }
+
+        // Connection guard — namespace-agnostic (same connectedSites check as
+        // every other dApp method; not EVM-specific).
+        if (!connected) {
+          sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+
+        if (!Number.isFinite(requestedChainId)) {
+          sendResponse({ ok: false, error: { code: -32602, message: "Invalid chainId." } });
+          return;
+        }
+
+        if (!matchedChain) {
+          sendResponse({
+            ok: false,
+            error: {
+              code: 4902,
+              message: "Unrecognized chain.",
+              data: { chainId: requestedChainId },
+            },
+          });
+          return;
+        }
+
+        // Already active — succeed immediately, no approval popup.
+        if (requestedChainId === chainId) {
+          sendResponse({ ok: true, result: null });
+          return;
+        }
+
+        const simplSwitchApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(simplSwitchApprovalId, {
+          id: simplSwitchApprovalId,
+          origin,
+          kind: "switch_chain",
+          switchChainId: requestedChainId,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        if (import.meta.env.DEV) {
+          console.debug("[simpl:bg] simpl_switchChain → approval popup", {
+            approvalId: simplSwitchApprovalId,
+            switchChainId: requestedChainId,
+          });
+        }
+        await openDappApprovalWindow(simplSwitchApprovalId);
+        return;
+      }
+
       case "eth_sendTransaction": {
         const connected = await getDappConnectionForOrigin(origin);
         if (!connected) {
@@ -1025,6 +1124,12 @@ async function handleDappRequest(
 
       // Switch the active signer account. `simpl_switchAccount` is the preferred
       // name (accepts accountId); `simpl_setActiveAccount` is kept as an alias.
+      //
+      // SECURITY: the active account decides which key signs the next
+      // transaction/message, so a connected dApp must NOT be able to reassign it
+      // silently. This routes through the same explicit user-approval popup as
+      // wallet_switchEthereumChain — the account only changes after the user
+      // confirms. (Was previously applied immediately for any connected origin.)
       case "simpl_switchAccount":
       case "simpl_setActiveAccount": {
         const connected = await getDappConnectionForOrigin(origin);
@@ -1049,21 +1154,23 @@ async function handleDappRequest(
           sendResponse({ ok: false, error: { code: -32602, message: "Unknown account." } });
           return;
         }
-        // Already active — no-op success.
+        // Already active — no-op success, no approval popup.
         if (match.id === bootstrap.walletState.selectedAccountId) {
           sendResponse({ ok: true, result: [match.address] });
           return;
         }
-        const { walletState: nextState, selectedAccount: nextSelected } =
-          await walletService.selectAccount({ accountId: match.id });
-        // Notify every connected dApp of the new active account (standard event),
-        // and push the full sanitized list so first-party surfaces live-update.
-        await broadcastProviderEvent("accountsChanged", [nextSelected.address]);
-        await broadcastProviderEvent(
-          "simpl_accountsChanged",
-          nextState.accounts.map((a) => toSafeAccountMeta(a, nextState.selectedAccountId)),
-        );
-        sendResponse({ ok: true, result: [nextSelected.address] });
+
+        const switchAccountApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        pendingDappApprovals.set(switchAccountApprovalId, {
+          id: switchAccountApprovalId,
+          origin,
+          kind: "switch_account",
+          switchAccountId: match.id,
+          switchAccountAddress: match.address,
+          resolve: (result) => sendResponse({ ok: true, result }),
+          reject: (error) => sendResponse({ ok: false, error }),
+        });
+        await openDappApprovalWindow(switchAccountApprovalId);
         return;
       }
 
@@ -1341,6 +1448,22 @@ chrome.runtime.onMessage.addListener(
                   },
                 }
               : {}),
+            ...(pending.kind === "switch_account" && pending.switchAccountId
+              ? {
+                  switchAccount: (() => {
+                    const requested = bootstrap.walletState.accounts.find(
+                      (a) => a.id === pending.switchAccountId,
+                    );
+                    const current = bootstrap.selectedAccount;
+                    return {
+                      requestedAccountLabel: requested?.label ?? "Account",
+                      requestedAccountAddress: pending.switchAccountAddress ?? requested?.address ?? "",
+                      currentAccountLabel: current?.label ?? "Account",
+                      currentAccountAddress: current?.address ?? "",
+                    };
+                  })(),
+                }
+              : {}),
             ...(pending.kind === "transaction" && pending.transactionParams
               ? {
                   transaction: {
@@ -1441,6 +1564,18 @@ chrome.runtime.onMessage.addListener(
           pendingDappApprovals.delete(id);
           pending.resolve(null);
           await broadcastProviderEvent("chainChanged", `0x${pending.switchChainId.toString(16)}`);
+        } else if (pending.kind === "switch_account" && pending.switchAccountId) {
+          const { walletState: nextState, selectedAccount: nextSelected } =
+            await walletService.selectAccount({ accountId: pending.switchAccountId });
+          pendingDappApprovals.delete(id);
+          // Notify every connected dApp of the new active account (standard
+          // event) + push the sanitized list so first-party surfaces update.
+          await broadcastProviderEvent("accountsChanged", [nextSelected.address]);
+          await broadcastProviderEvent(
+            "simpl_accountsChanged",
+            nextState.accounts.map((a) => toSafeAccountMeta(a, nextState.selectedAccountId)),
+          );
+          pending.resolve([nextSelected.address]);
         } else if (pending.kind === "transaction" && pending.transactionParams) {
           const result = await walletService.sendSelectedPreparedTransaction({
             transaction: {
@@ -1470,7 +1605,8 @@ chrome.runtime.onMessage.addListener(
         if (
           pending.kind === "connect" ||
           pending.kind === "tron_connect" ||
-          pending.kind === "switch_chain"
+          pending.kind === "switch_chain" ||
+          pending.kind === "switch_account"
         ) {
           pendingDappApprovals.delete(id);
           pending.reject({ code: -32603, message: getErrorMessage(err) });
