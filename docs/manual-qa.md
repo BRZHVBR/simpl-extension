@@ -51,6 +51,18 @@ on the Stage 4 backup / locked-approval / watch-only scenarios.
       destination pending → confirmed; invalid destination address blocked
 - [ ] Watch-only / locked / unverified-backup account cannot reach swap/bridge confirm
 
+## Performance / UI polish (Stage 7)
+- [ ] Fresh install → unlock → **Home loads fast** (no swap/bridge/WC code on the initial path)
+- [ ] Navigate to Send / Swap / Bridge / Receive / Settings / Security / Accounts /
+      Activity → each lazy route loads with a brief loading state, then renders; back works
+- [ ] dApp approval window renders; WalletConnect approval window renders
+- [ ] A request on an unknown network shows "Unknown network (<id>)" — no crash
+- [ ] Known networks show correct labels (Ethereum / BNB / Base / Sepolia / TRON / Solana / Bitcoin / TON)
+- [ ] Logo renders crisply on Welcome / Unlock / header (optimized asset)
+- [ ] Light + dark mode legible; popup 360×600 has no layout jumps / horizontal scroll
+- [ ] Side panel opens and renders
+- [ ] Offline / chunk-load failure on a lazy route → error boundary + Retry (no blank popup)
+
 ## Production build
 - [ ] `npm run build` → load `dist/` unpacked → no console errors; the
       permissions shown are only the host allowlist (no "all sites"); no
