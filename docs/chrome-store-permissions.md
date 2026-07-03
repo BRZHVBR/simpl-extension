@@ -25,9 +25,7 @@ fails the release gate if `nativeMessaging` reappears without a shipped host.
 
 ### Notes
 
-- No `webRequest`, `scripting`, `alarms`, `activeTab`, `cookies`,
-  `declarativeNetRequest`, `clipboardRead`, or `nativeMessaging` permission is
-  requested — good.
+- No `nativeMessaging`, `webRequest`, `scripting`, `alarms`, `activeTab`, `cookies`, `declarativeNetRequest`, or `clipboardRead` permission is requested — good.
 
 ## `content_scripts`
 

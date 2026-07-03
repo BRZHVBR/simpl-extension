@@ -14,8 +14,8 @@ provider and WalletConnect, and approve every signature explicitly.
 ## Features
 
 - Create / import HD wallets (BIP-39), multiple accounts
-- Multi-chain: EVM (Ethereum, Base, BNB, Polygon, Arbitrum, Optimism, Avalanche,
-  Sepolia), Solana, Bitcoin, TRON
+- Multi-chain: Ethereum, BNB Chain, Base, Solana, Bitcoin, TRON, TON
+  (plus Sepolia, Bitcoin Testnet, Solana Devnet)
 - Send / receive
 - Same-chain swaps and cross-chain bridging
 - Portfolio overview and per-asset detail pages
