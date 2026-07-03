@@ -21,6 +21,19 @@ import {
   sanitizePeerUrl,
   uniqueStrings,
 } from "../core/walletconnect/wc-approval-policy";
+import {
+  migrateConnectedSites,
+  findByTopic,
+  isPermissionActive,
+  hasMethodPermission,
+  grantConnectedSitePermission,
+  revokeConnectedSitePermission,
+  markPermissionRevoked,
+  touchConnectedSitePermission,
+  type ConnectedSiteAccount,
+  type ConnectedSiteChain,
+  type ChainNamespace,
+} from "../core/permissions/connected-site-permissions";
 
 const PENDING_WALLETCONNECT_REQUEST_KEY = "pendingWalletConnectRequest";
 const PENDING_WALLETCONNECT_PROPOSAL_KEY = "pendingWalletConnectProposal";
@@ -64,6 +77,7 @@ type SimpleRuntimeMessage = {
   uri?: string;
   password?: string;
   requestId?: number;
+  topic?: string;
 };
 
 type ConnectedSite = {
@@ -792,38 +806,99 @@ function openApprovalWindow() {
   );
 }
 
-async function saveConnectedSiteFromProposal(proposal: any) {
+function mapWcNamespace(ns: string): ChainNamespace {
+  return (["eip155", "tron", "solana", "bip122", "ton"].includes(ns) ? ns : "eip155") as ChainNamespace;
+}
+
+function accountTypeForNamespace(ns: ChainNamespace): ConnectedSiteAccount["type"] {
+  switch (ns) {
+    case "tron":
+      return "tron";
+    case "solana":
+      return "solana";
+    case "bip122":
+      return "bitcoin";
+    case "ton":
+      return "ton";
+    default:
+      return "evm";
+  }
+}
+
+// Convert an approved WalletConnect namespaces object into the scoped
+// account/chain/method lists of the permission model.
+function scopesFromNamespaces(namespaces: Record<string, any>): {
+  accounts: ConnectedSiteAccount[];
+  chains: ConnectedSiteChain[];
+  methods: string[];
+} {
+  const accounts: ConnectedSiteAccount[] = [];
+  const chains: ConnectedSiteChain[] = [];
+  const methods = new Set<string>();
+
+  for (const [nsKey, nsVal] of Object.entries(namespaces ?? {})) {
+    const ns = mapWcNamespace(nsKey);
+    const val = nsVal as { chains?: string[]; methods?: string[]; accounts?: string[] };
+
+    for (const chain of Array.isArray(val?.chains) ? val.chains : []) {
+      if (!chains.some((c) => c.chainId === chain)) {
+        chains.push({ namespace: ns, chainId: chain });
+      }
+    }
+    for (const method of Array.isArray(val?.methods) ? val.methods : []) {
+      methods.add(method);
+    }
+    for (const caip10 of Array.isArray(val?.accounts) ? val.accounts : []) {
+      // CAIP-10: "<ns>:<chainId>:<address>"
+      const address = caip10.split(":").slice(2).join(":");
+      if (address && !accounts.some((a) => a.address.toLowerCase() === address.toLowerCase())) {
+        accounts.push({ accountId: address, address, type: accountTypeForNamespace(ns) });
+      }
+    }
+  }
+
+  return { accounts, chains, methods: Array.from(methods) };
+}
+
+// Persist a scoped WalletConnect permission AFTER a successful approveSession.
+// Keyed by session topic so revoke/session-lifecycle can target it precisely.
+async function saveConnectedSiteFromProposal(
+  proposal: any,
+  namespaces: Record<string, any>,
+  session: any,
+) {
   const metadata = proposal?.proposer?.metadata ?? {};
   const url = typeof metadata.url === "string" ? metadata.url : "";
   const origin = url || "walletconnect";
   const now = new Date().toISOString();
+  const topic = typeof session?.topic === "string" ? session.topic : undefined;
+  const expiresAt =
+    typeof session?.expiry === "number" ? new Date(session.expiry * 1000).toISOString() : undefined;
+
+  const { accounts, chains, methods } = scopesFromNamespaces(namespaces);
 
   const stored = await chromeStorageGet(CONNECTED_SITES_KEY);
-  const existing = Array.isArray(stored[CONNECTED_SITES_KEY])
-    ? (stored[CONNECTED_SITES_KEY] as ConnectedSite[])
-    : [];
+  const perms = migrateConnectedSites(stored[CONNECTED_SITES_KEY], now);
 
-  const nextSite: ConnectedSite = {
-    id: origin,
-    origin,
-    name: typeof metadata.name === "string" ? metadata.name : origin,
-    iconUrl: Array.isArray(metadata.icons) && typeof metadata.icons[0] === "string"
-      ? metadata.icons[0]
-      : undefined,
-    // TRON proposals get a TRON badge; other WC sessions show WalletConnect.
-    type: proposalRequestsTron(proposal) ? "tron" : "walletconnect",
-    connectedAt: existing.find((site) => site.id === origin)?.connectedAt ?? now,
-    lastUsedAt: now,
-  };
+  const next = grantConnectedSitePermission(
+    perms,
+    {
+      origin,
+      source: "walletconnect",
+      ...(topic ? { topic } : {}),
+      ...(typeof metadata.name === "string" ? { name: metadata.name } : {}),
+      ...(Array.isArray(metadata.icons) && typeof metadata.icons[0] === "string"
+        ? { icon: metadata.icons[0] }
+        : {}),
+      accounts,
+      chains,
+      methods,
+      ...(expiresAt ? { expiresAt } : {}),
+    },
+    now,
+  );
 
-  const nextSites = [
-    nextSite,
-    ...existing.filter((site) => site.id !== origin),
-  ];
-
-  await chromeStorageSet({
-    [CONNECTED_SITES_KEY]: nextSites,
-  });
+  await chromeStorageSet({ [CONNECTED_SITES_KEY]: next });
 }
 
 async function getSelectedWalletAccount() {
@@ -1317,13 +1392,14 @@ async function approvePendingWalletConnectProposal() {
 
   const namespaces = await buildNamespacesForProposal(proposal);
 
-  await (walletKit as any).approveSession?.({
+  const session = await (walletKit as any).approveSession?.({
     id: pending.id,
     namespaces,
   });
 
-  // Only now — after approveSession resolved — record the connected site.
-  await saveConnectedSiteFromProposal(proposal);
+  // Only now — after approveSession resolved — record the scoped permission
+  // (keyed by the new session topic).
+  await saveConnectedSiteFromProposal(proposal, namespaces, session);
 
   proposalCache.delete(pending.id);
   await clearPendingWalletConnectProposal();
@@ -1463,22 +1539,78 @@ async function getWalletKit() {
       return;
     }
 
+    // Scoped-permission guard: the session (topic) must hold an active
+    // permission that includes this method (and chain, when the request carries
+    // one). No/revoked/expired permission → reject; never open an approval.
+    const now = new Date().toISOString();
+    const storedPerms = await chromeStorageGet(CONNECTED_SITES_KEY);
+    const perms = migrateConnectedSites(storedPerms[CONNECTED_SITES_KEY], now);
+    const perm = findByTopic(perms, topic);
+
+    const permitted =
+      perm !== null &&
+      isPermissionActive(perm, Date.now()) &&
+      hasMethodPermission(perm, method) &&
+      (chainId === undefined || perm.chains.some((c) => c.chainId === chainId));
+
+    if (!permitted) {
+      await (walletKit as any).respondSessionRequest?.({
+        topic,
+        response: {
+          id,
+          jsonrpc: "2.0",
+          error: {
+            code: 4100,
+            message: "Session is not permitted for this request. Reconnect the dApp.",
+          },
+        },
+      });
+      return;
+    }
+
+    // Mark the session as recently used.
+    await chromeStorageSet({
+      [CONNECTED_SITES_KEY]: touchConnectedSitePermission(perms, { topic }, now),
+    });
+
     const pendingRequest: WalletConnectPendingRequest = {
       topic,
       id,
       method,
       params,
       chainId,
-      receivedAt: new Date().toISOString(),
+      receivedAt: now,
     };
 
     await savePendingWalletConnectRequest(pendingRequest);
     openApprovalWindow();
   });
 
-  walletKit.on("session_delete", async () => {
+  // When a session is deleted (by the dApp or us), revoke its scoped permission.
+  walletKit.on("session_delete", async (event: any) => {
+    const topic = typeof event?.topic === "string" ? event.topic : undefined;
     await clearPendingWalletConnectRequest();
     await clearPendingWalletConnectProposal();
+
+    if (topic) {
+      const stored = await chromeStorageGet(CONNECTED_SITES_KEY);
+      const perms = migrateConnectedSites(stored[CONNECTED_SITES_KEY], new Date().toISOString());
+      await chromeStorageSet({
+        [CONNECTED_SITES_KEY]: revokeConnectedSitePermission(perms, { topic }),
+      });
+    }
+  });
+
+  // A session expiring inactivates its permission (kept as a tombstone).
+  (walletKit as any).on("session_expire", async (event: any) => {
+    const topic = typeof event?.topic === "string" ? event.topic : undefined;
+    if (!topic) return;
+    const now = new Date().toISOString();
+    const stored = await chromeStorageGet(CONNECTED_SITES_KEY);
+    const perms = migrateConnectedSites(stored[CONNECTED_SITES_KEY], now);
+    await chromeStorageSet({
+      [CONNECTED_SITES_KEY]: markPermissionRevoked(perms, { topic }, now),
+    });
   });
 
   console.log("SIMPLE WalletConnect offscreen engine started.");
@@ -1584,6 +1716,39 @@ chrome.runtime.onMessage.addListener(
             error: error instanceof Error ? error.message : String(error),
           });
         });
+
+      return true;
+    }
+
+    if (message?.type === "SIMPLE_WALLETCONNECT_DISCONNECT_SESSION") {
+      const topic = typeof message.topic === "string" ? message.topic : "";
+      void (async () => {
+        const walletKit = await getWalletKit();
+        // Disconnect the live session (best-effort) …
+        if (topic) {
+          try {
+            await (walletKit as any).disconnectSession?.({
+              topic,
+              reason: { code: 6000, message: "User revoked the session." },
+            });
+          } catch (error) {
+            console.error("WalletConnect disconnect failed:", error);
+          }
+          // … and remove its scoped permission regardless of disconnect result.
+          const stored = await chromeStorageGet(CONNECTED_SITES_KEY);
+          const perms = migrateConnectedSites(
+            stored[CONNECTED_SITES_KEY],
+            new Date().toISOString(),
+          );
+          await chromeStorageSet({
+            [CONNECTED_SITES_KEY]: revokeConnectedSitePermission(perms, { topic }),
+          });
+        }
+      })()
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) =>
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+        );
 
       return true;
     }

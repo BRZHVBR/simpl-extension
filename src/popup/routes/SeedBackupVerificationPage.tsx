@@ -2,6 +2,11 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { walletService } from "../../core/wallet/wallet.service";
 import { useTranslation } from "../../i18n";
+import {
+  markVerified,
+  parseBackupStatus,
+  toSecuritySettingsPatch,
+} from "../../core/security/backup-status";
 
 type VerificationStep = "password" | "review" | "quiz" | "done";
 
@@ -22,6 +27,9 @@ type RevealSeedResult =
 type SeedBackupVerificationPageProps = {
   onBack?: () => void;
   onVerified?: () => void | Promise<void>;
+  // Explicit "remind me later" (used by the fresh-wallet backup gate). When
+  // provided, a secondary action lets the user defer — recorded, never silent.
+  onSkip?: () => void | Promise<void>;
   allowBack?: boolean;
 };
 
@@ -163,13 +171,6 @@ function chromeStorageSet(items: Record<string, unknown>): Promise<void> {
 async function markSeedBackupVerified() {
   const now = new Date().toISOString();
 
-  const patch = {
-    seedBackupConfirmed: true,
-    seedBackupConfirmedAt: now,
-    seedBackupVerified: true,
-    seedBackupVerifiedAt: now,
-  };
-
   const stored = await chromeStorageGet([
     "securitySettings",
     "settings",
@@ -178,6 +179,14 @@ async function markSeedBackupVerified() {
   ]);
 
   const currentSecuritySettings = asRecord(stored.securitySettings);
+
+  // Write the v2 backupStatus (verified) AND the legacy mirror keys, so both the
+  // App backup gate (which reads backupStatus) and older screens agree.
+  const patch = {
+    ...toSecuritySettingsPatch(markVerified(parseBackupStatus(currentSecuritySettings), Date.now())),
+    seedBackupConfirmedAt: now,
+    seedBackupVerifiedAt: now,
+  };
 
   const currentSettings = asRecord(stored.settings);
   const currentSettingsSecurity = asRecord(currentSettings.security);
@@ -259,6 +268,7 @@ function BackIcon() {
 export default function SeedBackupVerificationPage({
   onBack,
   onVerified,
+  onSkip,
   allowBack = true,
 }: SeedBackupVerificationPageProps) {
   const { t } = useTranslation();
@@ -478,6 +488,18 @@ export default function SeedBackupVerificationPage({
             >
               {isLoading ? t("common.checking") : t("backup.revealRecoveryPhrase")}
             </button>
+
+            {onSkip ? (
+              <button
+                type="button"
+                className="btn ghost lg full"
+                disabled={isLoading}
+                onClick={() => void onSkip()}
+                style={{ marginTop: 10 }}
+              >
+                {t("backup.remindLater")}
+              </button>
+            ) : null}
           </form>
         ) : null}
 

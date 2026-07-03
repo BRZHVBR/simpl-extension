@@ -10,6 +10,7 @@ import ManageAssetsPage from "./ManageAssetsPage";
 import ValueCurrencyPage from "./ValueCurrencyPage";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import { isWatchOnly } from "../../core/accounts/account.types";
+import { parseBackupStatus, backupNeedsAttention } from "../../core/security/backup-status";
 import type { WalletState } from "../../core/storage/storage.types";
 import type { WalletAssetBalance } from "../../core/tokens/token-balance.service";
 import {
@@ -92,6 +93,7 @@ type HomePageProps = {
   onAddCustomToken: () => void;
   onSendAsset: (asset: WalletAssetBalance) => void;
   onRefresh: () => void | Promise<void>;
+  onBackup?: () => void;
 };
 
 const DEFAULT_BALANCE_REFRESH_SECONDS = 30;
@@ -631,6 +633,44 @@ export function HomePage(props: HomePageProps) {
 
   const selectedAddress = props.selectedAccount?.address ?? null;
   const selectedChainId = props.walletState.selectedChainId;
+
+  // Seed-backup reminder banner state. Reads the persisted backup status; the
+  // banner shows for a non-watch wallet whose recovery phrase still needs backup
+  // (migrated/unknown or a "remind me later" deferral).
+  const [showBackupBanner, setShowBackupBanner] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const local = (globalThis as unknown as {
+        chrome?: { storage?: { local?: { get?: (k: string[], cb: (i: Record<string, unknown>) => void) => void } } };
+      }).chrome?.storage?.local;
+      const get = local?.get;
+      let settings: unknown;
+      if (get) {
+        settings = await new Promise((resolve) => {
+          try {
+            get.call(local, ["securitySettings"], (i) => resolve(i?.securitySettings));
+          } catch {
+            resolve(undefined);
+          }
+        });
+      }
+      if (settings === undefined) {
+        try {
+          const raw = localStorage.getItem("securitySettings");
+          settings = raw ? JSON.parse(raw) : undefined;
+        } catch {
+          settings = undefined;
+        }
+      }
+      const attention =
+        backupNeedsAttention(parseBackupStatus(settings)) && !isWatchOnly(props.selectedAccount);
+      if (!cancelled) setShowBackupBanner(attention);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.selectedAccount]);
 
   const nativeAsset = assets.find((asset) => asset.type === "native") ?? null;
   const nativeAmount = nativeAsset ? Number(nativeAsset.formatted) : 0;
@@ -2174,6 +2214,35 @@ export function HomePage(props: HomePageProps) {
       </div>
 
       <div className="screen-body">
+        {showBackupBanner && props.onBackup ? (
+          <button
+            type="button"
+            onClick={props.onBackup}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              marginBottom: 16,
+              padding: "12px 14px",
+              borderRadius: 14,
+              border: "1px solid var(--warn-soft, var(--line))",
+              background: "var(--warn-soft, var(--bg-muted))",
+              color: "var(--text-primary, var(--ink-1))",
+              cursor: "pointer",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 2 }}>
+              {t("home.backupTitle")}
+            </div>
+            <div style={{ fontSize: 12, lineHeight: "16px", color: "var(--text-secondary, var(--ink-3))" }}>
+              {t("home.backupBody")}
+            </div>
+            <div style={{ marginTop: 6, fontSize: 12, fontWeight: 800, color: "var(--warn, var(--accent))" }}>
+              {t("home.backupCta")}
+            </div>
+          </button>
+        ) : null}
+
         <div className="balance-block">
           <div className="lbl">{t("home.totalBalance")}</div>
 

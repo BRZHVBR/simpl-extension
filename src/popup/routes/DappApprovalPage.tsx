@@ -608,18 +608,41 @@ export default function DappApprovalPage() {
           <p style={{ color: C.fgMuted, fontSize: 13, textAlign: "center", margin: 0, lineHeight: "19px" }}>
             {t("approval.walletLockedBody")}
           </p>
-          <button
-            type="button"
-            onClick={() => window.close()}
-            style={{
-              marginTop: 4, height: 46, padding: "0 24px",
-              borderRadius: 13, border: `1px solid ${C.cardBorder}`,
-              background: C.cardBg, color: C.fg,
-              fontSize: 15, fontWeight: 750, cursor: "pointer",
-            }}
-          >
-            {t("common.close")}
-          </button>
+          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+            <button
+              type="button"
+              onClick={() => {
+                // Open the wallet so the user can unlock / finish setup, then
+                // retry the dApp action. This request stays pending; it is NOT
+                // auto-approved, and closing this window rejects it safely.
+                try {
+                  window.open(chrome.runtime.getURL("popup.html"), "_blank");
+                } catch {
+                  /* fall back to close */
+                }
+              }}
+              style={{
+                height: 46, padding: "0 24px",
+                borderRadius: 13, border: "none",
+                background: C.fg, color: C.cardBg,
+                fontSize: 15, fontWeight: 750, cursor: "pointer",
+              }}
+            >
+              {t("approval.openWalletToUnlock")}
+            </button>
+            <button
+              type="button"
+              onClick={reject}
+              style={{
+                height: 46, padding: "0 24px",
+                borderRadius: 13, border: `1px solid ${C.cardBorder}`,
+                background: C.cardBg, color: C.fg,
+                fontSize: 15, fontWeight: 750, cursor: "pointer",
+              }}
+            >
+              {t("common.close")}
+            </button>
+          </div>
         </div>
       </Shell>
     );

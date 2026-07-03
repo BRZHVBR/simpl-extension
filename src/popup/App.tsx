@@ -24,6 +24,8 @@ import { AddCustomTokenPage } from "./routes/AddCustomTokenPage";
 import { SendPage } from "./routes/SendPage";
 import { RevealSeedPage } from "./routes/RevealSeedPage";
 import { RevealPrivateKeyPage } from "./routes/RevealPrivateKeyPage";
+import SeedBackupVerificationPage from "./routes/SeedBackupVerificationPage";
+import { parseBackupStatus, markSkipped, toSecuritySettingsPatch } from "../core/security/backup-status";
 import { SettingsPage } from "./routes/SettingsPage";
 import { ReceivePage } from "./routes/ReceivePage";
 import { openSidePanel } from "./surface-actions";
@@ -50,6 +52,7 @@ export type PopupRoute =
   | "add-custom-token"
   | "reveal-seed"
   | "reveal-private-key"
+  | "backup-verify"
   | "settings"
   | "transaction-history"
   | "transaction-details";
@@ -72,6 +75,77 @@ function readDeepLinkRoute(): PopupRoute | null {
     /* no/invalid location — ignore */
   }
   return null;
+}
+
+// Read the persisted securitySettings (chrome.storage.local, localStorage mirror
+// fallback) without importing the wallet service.
+async function readSecuritySettings(): Promise<unknown> {
+  const local = (globalThis as unknown as {
+    chrome?: { storage?: { local?: { get?: (k: string[], cb: (i: Record<string, unknown>) => void) => void } } };
+  }).chrome?.storage?.local;
+  const get = local?.get;
+  if (get) {
+    const stored = await new Promise<Record<string, unknown>>((resolve) => {
+      try {
+        get.call(local, ["securitySettings"], (i) => resolve(i ?? {}));
+      } catch {
+        resolve({});
+      }
+    });
+    if (stored.securitySettings !== undefined) return stored.securitySettings;
+  }
+  try {
+    const raw = localStorage.getItem("securitySettings");
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Record an explicit "remind me later" on the fresh-wallet backup gate so the
+// user lands on Home (with a reminder banner) instead of being trapped — but the
+// action is explicit, never a silent skip.
+async function markBackupSkipped(): Promise<void> {
+  const settings = await readSecuritySettings();
+  const current =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? (settings as Record<string, unknown>)
+      : {};
+  const next = { ...current, ...toSecuritySettingsPatch(markSkipped(parseBackupStatus(settings), Date.now())) };
+  const local = (globalThis as unknown as {
+    chrome?: { storage?: { local?: { set?: (i: Record<string, unknown>, cb?: () => void) => void } } };
+  }).chrome?.storage?.local;
+  const set = local?.set;
+  if (set) {
+    await new Promise<void>((resolve) => {
+      try {
+        set.call(local, { securitySettings: next }, () => resolve());
+      } catch {
+        resolve();
+      }
+    });
+  }
+  try {
+    localStorage.setItem("securitySettings", JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+}
+
+// Gate a fresh mnemonic wallet into seed verification: only when a v2
+// backupStatus exists that is required, unverified, and not yet skipped.
+// Never gates migrated/legacy wallets (they carry no `backupStatus` object).
+async function shouldGateToBackupVerify(): Promise<boolean> {
+  const settings = await readSecuritySettings();
+  const record =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? (settings as Record<string, unknown>)
+      : {};
+  if (!record.backupStatus || typeof record.backupStatus !== "object") {
+    return false;
+  }
+  const status = parseBackupStatus(settings);
+  return status.required && !status.verified && status.skippedAt === undefined;
 }
 
 function SidePanelIcon() {
@@ -154,6 +228,14 @@ export function App() {
       const target = deepLinkRouteRef.current;
       deepLinkRouteRef.current = null;
       setRoute(target);
+      return;
+    }
+    // Steer a freshly-created (unverified, not-yet-skipped) mnemonic wallet into
+    // the seed-verification flow before Home. Migrated wallets (no v2 backup
+    // status) and "remind me later" (skippedAt set) are NOT gated — they land on
+    // Home with a reminder banner instead.
+    if (await shouldGateToBackupVerify()) {
+      setRoute("backup-verify");
       return;
     }
     setRoute("home");
@@ -342,6 +424,7 @@ export function App() {
     onSendAsset={openSendPage}
     onRefresh={refresh}
     onHistory={() => setRoute("transaction-history")}
+    onBackup={() => setRoute("backup-verify")}
   />
 );
 
@@ -637,6 +720,20 @@ export function App() {
             onAdded={async () => {
               await syncViewState();
               setRoute("home");
+            }}
+          />
+        );
+
+      case "backup-verify":
+        return (
+          <SeedBackupVerificationPage
+            allowBack={false}
+            onVerified={async () => {
+              await refresh();
+            }}
+            onSkip={async () => {
+              await markBackupSkipped();
+              await refresh();
             }}
           />
         );

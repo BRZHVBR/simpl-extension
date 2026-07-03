@@ -153,27 +153,30 @@ check("past expiry → expired", isProposalExpired(1000, 2000 * 1000) === true);
 check("future expiry → not expired", isProposalExpired(9_999_999_999, 1000) === false);
 check("undefined expiry → not expired", isProposalExpired(undefined, Date.now()) === false);
 
-// ── Static privacy/manifest invariants ─────────────────────────────────────
-console.log("\nPrivacy / manifest hardening:");
+// ── WalletConnect approval-model static invariants ─────────────────────────
+// (Generic manifest / privacy / dApp checks live in check-manifest.ts,
+//  check-privacy.ts and check-dapp-permissions.ts.)
+console.log("\nWalletConnect approval-model source invariants:");
 const offscreenSrc = readFileSync(
   resolve(root, "src/background/walletconnect-offscreen.ts"),
   "utf8",
 );
-for (const rawKey of [
-  "lastWalletConnectProposalRaw",
-  "lastWalletConnectProposalDebug",
-  "lastWalletConnectTxDebug",
-  "lastWalletConnectApprovalResult",
-  "lastWalletConnectPairDebug",
-  "lastWalletConnectTronRequestDebug",
-  "lastWalletConnectAutoResponse",
-  "lastWalletConnectWatchedAsset",
-]) {
-  check(`offscreen no longer writes ${rawKey}`, !offscreenSrc.includes(rawKey));
-}
+
+// Isolate the session_proposal event handler body (up to the next walletKit.on).
+const proposalHandlerStart = offscreenSrc.indexOf('walletKit.on("session_proposal"');
+const proposalHandlerBody =
+  proposalHandlerStart === -1
+    ? ""
+    : offscreenSrc.slice(proposalHandlerStart, offscreenSrc.indexOf("walletKit.on(", proposalHandlerStart + 1));
+
+check("session_proposal handler exists", proposalHandlerBody.length > 0);
 check(
-  "offscreen no longer auto-approves in session_proposal",
-  !/session_proposal[\s\S]{0,400}approveSession/.test(offscreenSrc),
+  "session_proposal handler does NOT call approveSession (no auto-approve)",
+  !/approveSession/.test(proposalHandlerBody),
+);
+check(
+  "session_proposal handler does NOT write connectedSites (no connect before approve)",
+  !/saveConnectedSiteFromProposal/.test(proposalHandlerBody),
 );
 check(
   "offscreen exposes explicit proposal handlers",
@@ -182,43 +185,67 @@ check(
     offscreenSrc.includes("SIMPLE_WALLETCONNECT_GET_PENDING_PROPOSAL"),
 );
 
-const manifest = JSON.parse(readFileSync(resolve(root, "public/manifest.json"), "utf8"));
-check(
-  "manifest: no nativeMessaging permission",
-  !(manifest.permissions ?? []).includes("nativeMessaging"),
+// Approve path: connected site is saved AFTER approveSession, then pending cleared.
+const approveFn = offscreenSrc.slice(
+  offscreenSrc.indexOf("async function approvePendingWalletConnectProposal"),
+  offscreenSrc.indexOf("async function rejectPendingWalletConnectProposal"),
 );
-const hostPerms: string[] = manifest.host_permissions ?? [];
-check("manifest: host_permissions drops <all_urls>", !hostPerms.includes("<all_urls>"));
-check("manifest: host_permissions is a bounded allowlist", hostPerms.length > 0 && hostPerms.length < 40);
-for (const required of [
-  "https://api.getsimpl.io/*",
-  "https://api.trongrid.io/*",
-  "https://blockstream.info/*",
-  "https://api.mainnet-beta.solana.com/*",
-  "https://ethereum-rpc.publicnode.com/*",
-]) {
-  check(`manifest: host_permissions includes ${required}`, hostPerms.includes(required));
-}
-const contentMatches: string[] = (manifest.content_scripts ?? []).flatMap(
-  (cs: { matches?: string[] }) => cs.matches ?? [],
+const idxApprove = approveFn.indexOf("approveSession");
+const idxSaveSite = approveFn.indexOf("saveConnectedSiteFromProposal");
+// lastIndexOf: earlier clearPending calls exist in the expired/missing-proposal
+// guards; we assert a clear happens on the SUCCESS path, i.e. after approveSession.
+const idxClearAfter = approveFn.lastIndexOf("clearPendingWalletConnectProposal");
+check(
+  "approve: connected site saved only AFTER approveSession",
+  idxApprove !== -1 && idxSaveSite > idxApprove,
 );
 check(
-  "manifest: content_scripts no longer use <all_urls> (http/https only)",
-  contentMatches.length > 0 && !contentMatches.includes("<all_urls>"),
-);
-check(
-  "manifest: custom-host access is optional (not a default grant)",
-  Array.isArray(manifest.optional_host_permissions) &&
-    manifest.optional_host_permissions.length > 0,
+  "approve: pending proposal cleared after approveSession",
+  idxClearAfter > idxApprove,
 );
 
-const serviceWorkerSrc = readFileSync(
-  resolve(root, "src/background/service-worker.ts"),
-  "utf8",
+// Reject path: rejectSession + clear pending, no connected site.
+const rejectFn = offscreenSrc.slice(
+  offscreenSrc.indexOf("async function rejectPendingWalletConnectProposal"),
+  offscreenSrc.indexOf("async function getWalletKit"),
 );
 check(
-  "simpl_switchAccount routes through explicit approval (no direct selectAccount in handler)",
-  serviceWorkerSrc.includes('kind: "switch_account"'),
+  "reject: calls rejectWalletConnectSession + clears pending, no connected site",
+  /rejectWalletConnectSession/.test(rejectFn) &&
+    /clearPendingWalletConnectProposal/.test(rejectFn) &&
+    !/saveConnectedSiteFromProposal/.test(rejectFn),
+);
+
+// ── WalletConnect sessions as scoped permissions (Stage 3) ──────────────────
+console.log("\nWalletConnect scoped-permission mapping:");
+check(
+  "approve records a WalletConnect-source permission via grantConnectedSitePermission",
+  /grantConnectedSitePermission[\s\S]{0,200}source:\s*"walletconnect"/.test(offscreenSrc),
+);
+const sessionReqBody = offscreenSrc.slice(
+  offscreenSrc.indexOf('walletKit.on("session_request"'),
+  offscreenSrc.indexOf('walletKit.on("session_delete"'),
+);
+check(
+  "session_request looks up the permission by topic",
+  /findByTopic/.test(sessionReqBody),
+);
+check(
+  "session_request enforces active + method (+ chain) permission",
+  /isPermissionActive/.test(sessionReqBody) &&
+    /hasMethodPermission/.test(sessionReqBody),
+);
+check(
+  "session_request rejects an unpermitted request (4100) instead of prompting",
+  /!permitted[\s\S]{0,200}4100/.test(sessionReqBody),
+);
+check(
+  "session_delete revokes the topic's permission",
+  /session_delete[\s\S]{0,800}revokeConnectedSitePermission/.test(offscreenSrc),
+);
+check(
+  "engine exposes a disconnect-session handler",
+  offscreenSrc.includes("SIMPLE_WALLETCONNECT_DISCONNECT_SESSION"),
 );
 
 console.log("");

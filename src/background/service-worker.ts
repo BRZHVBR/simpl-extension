@@ -12,6 +12,93 @@ import {
   BITCOIN_TESTNET_CHAIN_ID,
 } from "../core/networks/chain-registry";
 import type { WalletAccount } from "../core/accounts/account.types";
+import {
+  migrateConnectedSites,
+  findByOrigin,
+  isPermissionActive,
+  hasMethodPermission,
+  hasAccountPermission,
+  hasChainPermission,
+  getPermittedAddresses,
+  grantConnectedSitePermission,
+  touchConnectedSitePermission,
+  appendAuditEvent,
+  AUDIT_LOG_KEY,
+  type ConnectedSitePermission,
+  type ConnectedSiteAccount,
+  type ConnectedSiteChain,
+  type AuditEvent,
+} from "../core/permissions/connected-site-permissions";
+
+// EVM chains the wallet supports; used to scope an injected connect grant.
+const SUPPORTED_EVM_CHAIN_IDS = [1, 56, 8453, 11155111];
+const DEFAULT_EVM_METHODS = [
+  "eth_accounts",
+  "eth_requestAccounts",
+  "eth_chainId",
+  "personal_sign",
+  "eth_signTypedData_v4",
+  "eth_sendTransaction",
+  "wallet_switchEthereumChain",
+];
+const DEFAULT_TRON_METHODS = ["tron_accounts", "tron_sign", "tron_signMessage", "tron_sendTransaction"];
+
+// ── Connected-site permission storage layer (see core/permissions) ───────────
+
+async function readPermissions(): Promise<ConnectedSitePermission[]> {
+  const stored = await chrome.storage.local.get("connectedSites");
+  return migrateConnectedSites(stored["connectedSites"], new Date().toISOString());
+}
+
+async function writePermissions(perms: ConnectedSitePermission[]): Promise<void> {
+  await chrome.storage.local.set({ connectedSites: perms });
+}
+
+// Active (not revoked / not expired) injected permission for an origin, or null.
+async function getActiveOriginPermission(origin: string): Promise<ConnectedSitePermission | null> {
+  const perm = findByOrigin(await readPermissions(), origin);
+  return perm && isPermissionActive(perm, Date.now()) ? perm : null;
+}
+
+async function auditLog(event: AuditEvent): Promise<void> {
+  try {
+    const stored = await chrome.storage.local.get(AUDIT_LOG_KEY);
+    await chrome.storage.local.set({
+      [AUDIT_LOG_KEY]: appendAuditEvent(stored[AUDIT_LOG_KEY], event),
+    });
+  } catch {
+    // Audit logging must never break a request.
+  }
+}
+
+function shortAddr(a: string): string {
+  return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+}
+
+// Grant an injected-dApp permission scoped to one account + all supported EVM
+// chains + the default EVM method set (each signing/send action still requires
+// its own explicit approval).
+async function grantInjectedEvmPermission(
+  origin: string,
+  account: { id: string; address: string },
+): Promise<void> {
+  const perms = await readPermissions();
+  const accounts: ConnectedSiteAccount[] = [
+    { accountId: account.id, address: account.address, type: "evm" },
+  ];
+  const chains: ConnectedSiteChain[] = SUPPORTED_EVM_CHAIN_IDS.map((id) => ({
+    namespace: "eip155",
+    chainId: String(id),
+    label: getChainById(id)?.name,
+  }));
+  await writePermissions(
+    grantConnectedSitePermission(
+      perms,
+      { origin, source: "injected", accounts, chains, methods: DEFAULT_EVM_METHODS },
+      new Date().toISOString(),
+    ),
+  );
+}
 
 // Message Settings sends after the user changes "Default open mode" so the
 // service worker re-applies the toolbar-icon behavior without a reload.
@@ -598,48 +685,52 @@ async function openDappApprovalWindow(approvalId: string): Promise<void> {
   dappApprovalWindowId = created?.id ?? null;
 }
 
-// Read the connectedSites array from storage (same format as ConnectedSitesPage).
+// True when the origin has an active (not revoked / not expired) permission.
+// Presence-only guard — method/account/chain scoping is enforced per method.
 async function getDappConnectionForOrigin(origin: string): Promise<boolean> {
-  const stored = await chrome.storage.local.get("connectedSites");
-  const sites = stored["connectedSites"];
-  if (!Array.isArray(sites)) return false;
-  return sites.some(
-    (s: unknown) =>
-      s !== null &&
-      typeof s === "object" &&
-      (s as Record<string, unknown>)["origin"] === origin,
-  );
+  return (await getActiveOriginPermission(origin)) !== null;
 }
 
-// Save a new connection to the connectedSites array (same format as ConnectedSitesPage).
-// `type` drives the network badge shown in the Connected Sites UI.
+// Grant/refresh a connected-site permission on connect approval. EVM grants the
+// approving account + supported EVM chains; TRON grants the TRON account + the
+// TRON chain. Each signing/send action still requires its own approval.
 async function saveDappConnection(
   origin: string,
   type: "evm" | "tron" = "evm",
+  account?: { id: string; address: string },
 ): Promise<void> {
-  const stored = await chrome.storage.local.get("connectedSites");
-  const existing = Array.isArray(stored["connectedSites"])
-    ? (stored["connectedSites"] as unknown[])
-    : [];
-
-  // Avoid duplicates.
-  const filtered = existing.filter(
-    (s) =>
-      s !== null &&
-      typeof s === "object" &&
-      (s as Record<string, unknown>)["origin"] !== origin,
-  );
-
+  const perms = await readPermissions();
   const now = new Date().toISOString();
-  filtered.push({
-    id: origin,
-    origin,
-    type,
-    connectedAt: now,
-    lastUsedAt: now,
-  });
 
-  await chrome.storage.local.set({ connectedSites: filtered });
+  if (type === "tron") {
+    const accounts: ConnectedSiteAccount[] = account
+      ? [{ accountId: account.id, address: account.address, type: "tron" }]
+      : [];
+    const chains: ConnectedSiteChain[] = [
+      { namespace: "tron", chainId: String(TRON_MAINNET_CHAIN_ID), label: "TRON Mainnet" },
+    ];
+    await writePermissions(
+      grantConnectedSitePermission(
+        perms,
+        { origin, source: "injected", accounts, chains, methods: DEFAULT_TRON_METHODS },
+        now,
+      ),
+    );
+    return;
+  }
+
+  // EVM: use the given account, else the currently selected one.
+  const resolved =
+    account ??
+    (await (async () => {
+      const b = await walletService.bootstrap();
+      return b.selectedAccount
+        ? { id: b.selectedAccount.id, address: b.selectedAccount.address }
+        : undefined;
+    })());
+  if (resolved) {
+    await grantInjectedEvmPermission(origin, resolved);
+  }
 }
 
 function extractPersonalSignDisplay(params: unknown[]): string {
@@ -826,11 +917,39 @@ async function handleDappRequest(
     const bootstrap = await walletService.bootstrap();
     const address = bootstrap.selectedAccount?.address ?? null;
     const chainId = bootstrap.walletState.selectedChainId;
+    const isWatchOnly = bootstrap.selectedAccount?.type === "watch";
+
+    // Watch-only accounts cannot sign or send. Reject up-front with a clear
+    // error instead of opening a signing approval that can never succeed.
+    if (
+      isWatchOnly &&
+      (method === "personal_sign" ||
+        method === "eth_signTypedData_v4" ||
+        method === "eth_sendTransaction")
+    ) {
+      sendResponse({
+        ok: false,
+        error: {
+          code: 4100,
+          message:
+            "Watch-only accounts can view balances and activity, but cannot sign transactions.",
+        },
+      });
+      return;
+    }
 
     switch (method) {
       case "eth_accounts": {
-        const connected = await getDappConnectionForOrigin(origin);
-        sendResponse({ ok: true, result: connected && address ? [address] : [] });
+        // Return ONLY the accounts this origin was granted (and that still exist
+        // in the wallet) — never the whole wallet, never an unpermitted account.
+        const perm = await getActiveOriginPermission(origin);
+        const walletAddrs = new Set(
+          bootstrap.walletState.accounts.map((a) => a.address.toLowerCase()),
+        );
+        const permitted = perm
+          ? getPermittedAddresses(perm, "evm").filter((a) => walletAddrs.has(a.toLowerCase()))
+          : [];
+        sendResponse({ ok: true, result: permitted });
         return;
       }
 
@@ -845,10 +964,20 @@ async function handleDappRequest(
       }
 
       case "eth_requestAccounts": {
-        // Already connected — return accounts immediately.
-        const alreadyConnected = await getDappConnectionForOrigin(origin);
-        if (alreadyConnected && address) {
-          sendResponse({ ok: true, result: [address] });
+        // Active permission with at least one still-valid account → return it,
+        // no popup.
+        const perm = await getActiveOriginPermission(origin);
+        const walletAddrs = new Set(
+          bootstrap.walletState.accounts.map((a) => a.address.toLowerCase()),
+        );
+        const permitted = perm
+          ? getPermittedAddresses(perm, "evm").filter((a) => walletAddrs.has(a.toLowerCase()))
+          : [];
+        if (permitted.length > 0) {
+          await writePermissions(
+            touchConnectedSitePermission(await readPermissions(), { origin }, new Date().toISOString()),
+          );
+          sendResponse({ ok: true, result: permitted });
           return;
         }
 
@@ -880,13 +1009,27 @@ async function handleDappRequest(
       }
 
       case "personal_sign": {
-        const connected = await getDappConnectionForOrigin(origin);
-        if (!connected) {
+        const perm = await getActiveOriginPermission(origin);
+        if (!perm) {
           sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+        if (!hasMethodPermission(perm, "personal_sign")) {
+          void auditLog({ type: "method_rejected", at: new Date().toISOString(), origin, method });
+          sendResponse({ ok: false, error: { code: 4100, message: "This site is not permitted to request signatures. Reconnect to grant it." } });
           return;
         }
         if (!address) {
           sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+        // The signer address (personal_sign params: [message, address]) must be
+        // one the site was granted.
+        const signer = (message.params.find(
+          (p): p is string => typeof p === "string" && /^0x[a-fA-F0-9]{40}$/.test(p),
+        ) ?? address);
+        if (!hasAccountPermission(perm, signer)) {
+          sendResponse({ ok: false, error: { code: 4100, message: "This account is not permitted for this site." } });
           return;
         }
         const signApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -903,13 +1046,26 @@ async function handleDappRequest(
       }
 
       case "eth_signTypedData_v4": {
-        const connected = await getDappConnectionForOrigin(origin);
-        if (!connected) {
+        const perm = await getActiveOriginPermission(origin);
+        if (!perm) {
           sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized. Connect the site first." } });
+          return;
+        }
+        if (!hasMethodPermission(perm, "eth_signTypedData_v4")) {
+          void auditLog({ type: "method_rejected", at: new Date().toISOString(), origin, method });
+          sendResponse({ ok: false, error: { code: 4100, message: "This site is not permitted to request signatures. Reconnect to grant it." } });
           return;
         }
         if (!address) {
           sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+        // The signer address (typedData params: [address, data]) must be granted.
+        const signer = (message.params.find(
+          (p): p is string => typeof p === "string" && /^0x[a-fA-F0-9]{40}$/.test(p),
+        ) ?? address);
+        if (!hasAccountPermission(perm, signer)) {
+          sendResponse({ ok: false, error: { code: 4100, message: "This account is not permitted for this site." } });
           return;
         }
         const tdApprovalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -956,6 +1112,29 @@ async function handleDappRequest(
 
         // Already active — return null immediately per EIP-3326.
         if (requestedChainId === chainId) {
+          sendResponse({ ok: true, result: null });
+          return;
+        }
+
+        // If the target chain is already granted to this site, switch directly
+        // (no popup) — it was approved at connect / a prior switch. Otherwise fall
+        // through to an explicit approval that will grant it.
+        const switchPerm = await getActiveOriginPermission(origin);
+        if (
+          switchPerm &&
+          hasChainPermission(switchPerm, { namespace: "eip155", chainId: String(requestedChainId) })
+        ) {
+          await walletService.setSelectedChainId(requestedChainId);
+          await writePermissions(
+            touchConnectedSitePermission(await readPermissions(), { origin }, new Date().toISOString()),
+          );
+          void auditLog({
+            type: "chain_switch_approved",
+            at: new Date().toISOString(),
+            origin,
+            detail: String(requestedChainId),
+          });
+          await broadcastProviderEvent("chainChanged", `0x${requestedChainId.toString(16)}`);
           sendResponse({ ok: true, result: null });
           return;
         }
@@ -1055,13 +1234,23 @@ async function handleDappRequest(
       }
 
       case "eth_sendTransaction": {
-        const connected = await getDappConnectionForOrigin(origin);
-        if (!connected) {
+        const perm = await getActiveOriginPermission(origin);
+        if (!perm) {
           sendResponse({ ok: false, error: { code: 4100, message: "Unauthorized: connect wallet first." } });
+          return;
+        }
+        if (!hasMethodPermission(perm, "eth_sendTransaction")) {
+          void auditLog({ type: "method_rejected", at: new Date().toISOString(), origin, method });
+          sendResponse({ ok: false, error: { code: 4100, message: "This site is not permitted to send transactions. Reconnect to grant it." } });
           return;
         }
         if (!address) {
           sendResponse({ ok: false, error: { code: 4900, message: "Wallet is locked." } });
+          return;
+        }
+        // The current network must be one this site was granted.
+        if (!hasChainPermission(perm, { namespace: "eip155", chainId: String(chainId) })) {
+          sendResponse({ ok: false, error: { code: 4100, message: "This network is not permitted for this site." } });
           return;
         }
 
@@ -1080,6 +1269,11 @@ async function handleDappRequest(
         const txFrom = typeof txParam["from"] === "string" ? txParam["from"] : null;
         if (txFrom && txFrom.toLowerCase() !== address.toLowerCase()) {
           sendResponse({ ok: false, error: { code: 4100, message: "Transaction from address does not match active account." } });
+          return;
+        }
+        // The signer account must be one the site was granted.
+        if (!hasAccountPermission(perm, txFrom ?? address)) {
+          sendResponse({ ok: false, error: { code: 4100, message: "This account is not permitted for this site." } });
           return;
         }
 
@@ -1528,11 +1722,22 @@ chrome.runtime.onMessage.addListener(
 
         if (pending.kind === "connect") {
           pendingDappApprovals.delete(id);
-          await saveDappConnection(pending.origin);
+          const acct = bootstrap.selectedAccount;
+          await saveDappConnection(
+            pending.origin,
+            "evm",
+            acct ? { id: acct.id, address: acct.address } : undefined,
+          );
+          void auditLog({ type: "site_connected", at: new Date().toISOString(), origin: pending.origin, detail: shortAddr(address) });
           pending.resolve([address]);
         } else if (pending.kind === "tron_connect") {
           pendingDappApprovals.delete(id);
-          await saveDappConnection(pending.origin, "tron");
+          await saveDappConnection(
+            pending.origin,
+            "tron",
+            pending.tronAddress ? { id: pending.tronAddress, address: pending.tronAddress } : undefined,
+          );
+          void auditLog({ type: "site_connected", at: new Date().toISOString(), origin: pending.origin, detail: "TRON" });
           pending.resolve(pending.tronAddress ? [pending.tronAddress] : []);
           // Notify the TRON provider so window.tronWeb hydrates immediately.
           await broadcastProviderEvent("connect", { chainId: TRON_CHAIN_ID_HEX }, "tron");
@@ -1544,6 +1749,7 @@ chrome.runtime.onMessage.addListener(
             password,
           });
           pendingDappApprovals.delete(id);
+          void auditLog({ type: "method_approved", at: new Date().toISOString(), origin: pending.origin, method: "tron_sign" });
           pending.resolve(signed);
         } else if (pending.kind === "personal_sign") {
           const result = await walletService.signSelectedPersonalMessage({
@@ -1551,6 +1757,7 @@ chrome.runtime.onMessage.addListener(
             password,
           });
           pendingDappApprovals.delete(id);
+          void auditLog({ type: "method_approved", at: new Date().toISOString(), origin: pending.origin, method: "personal_sign" });
           pending.resolve(result.signature);
         } else if (pending.kind === "typed_data") {
           const result = await walletService.signSelectedTypedDataV4({
@@ -1558,16 +1765,81 @@ chrome.runtime.onMessage.addListener(
             password,
           });
           pendingDappApprovals.delete(id);
+          void auditLog({ type: "method_approved", at: new Date().toISOString(), origin: pending.origin, method: "eth_signTypedData_v4" });
           pending.resolve(result.signature);
         } else if (pending.kind === "switch_chain" && pending.switchChainId !== undefined) {
           await walletService.setSelectedChainId(pending.switchChainId);
+          // Record the newly-approved chain on the site's permission so future
+          // switches to it are direct.
+          const chainPerms = await readPermissions();
+          const current = findByOrigin(chainPerms, pending.origin);
+          if (current) {
+            const nextChains: ConnectedSiteChain[] = hasChainPermission(current, {
+              namespace: "eip155",
+              chainId: String(pending.switchChainId),
+            })
+              ? current.chains
+              : [
+                  ...current.chains,
+                  {
+                    namespace: "eip155" as const,
+                    chainId: String(pending.switchChainId),
+                    label: getChainById(pending.switchChainId)?.name,
+                  },
+                ];
+            await writePermissions(
+              grantConnectedSitePermission(
+                chainPerms,
+                {
+                  origin: current.origin,
+                  source: current.source,
+                  ...(current.topic ? { topic: current.topic } : {}),
+                  ...(current.name ? { name: current.name } : {}),
+                  ...(current.icon ? { icon: current.icon } : {}),
+                  accounts: current.accounts,
+                  chains: nextChains,
+                  methods: current.methods,
+                  ...(current.expiresAt ? { expiresAt: current.expiresAt } : {}),
+                },
+                new Date().toISOString(),
+              ),
+            );
+          }
           pendingDappApprovals.delete(id);
+          void auditLog({ type: "chain_switch_approved", at: new Date().toISOString(), origin: pending.origin, detail: String(pending.switchChainId) });
           pending.resolve(null);
           await broadcastProviderEvent("chainChanged", `0x${pending.switchChainId.toString(16)}`);
         } else if (pending.kind === "switch_account" && pending.switchAccountId) {
           const { walletState: nextState, selectedAccount: nextSelected } =
             await walletService.selectAccount({ accountId: pending.switchAccountId });
+          // Add the newly-active account to this site's permission so
+          // eth_accounts reflects it.
+          const acctPerms = await readPermissions();
+          const currentPerm = findByOrigin(acctPerms, pending.origin);
+          if (currentPerm && !hasAccountPermission(currentPerm, nextSelected.address)) {
+            await writePermissions(
+              grantConnectedSitePermission(
+                acctPerms,
+                {
+                  origin: currentPerm.origin,
+                  source: currentPerm.source,
+                  ...(currentPerm.topic ? { topic: currentPerm.topic } : {}),
+                  ...(currentPerm.name ? { name: currentPerm.name } : {}),
+                  ...(currentPerm.icon ? { icon: currentPerm.icon } : {}),
+                  accounts: [
+                    ...currentPerm.accounts,
+                    { accountId: nextSelected.id, address: nextSelected.address, type: "evm" },
+                  ],
+                  chains: currentPerm.chains,
+                  methods: currentPerm.methods,
+                  ...(currentPerm.expiresAt ? { expiresAt: currentPerm.expiresAt } : {}),
+                },
+                new Date().toISOString(),
+              ),
+            );
+          }
           pendingDappApprovals.delete(id);
+          void auditLog({ type: "account_switch_approved", at: new Date().toISOString(), origin: pending.origin, detail: shortAddr(nextSelected.address) });
           // Notify every connected dApp of the new active account (standard
           // event) + push the sanitized list so first-party surfaces update.
           await broadcastProviderEvent("accountsChanged", [nextSelected.address]);
@@ -1588,6 +1860,7 @@ chrome.runtime.onMessage.addListener(
             password,
           });
           pendingDappApprovals.delete(id);
+          void auditLog({ type: "method_approved", at: new Date().toISOString(), origin: pending.origin, method: "eth_sendTransaction" });
           pending.resolve(result.hash);
         }
         sendResponse({ ok: true });
@@ -1628,6 +1901,15 @@ chrome.runtime.onMessage.addListener(
 
     if (pending) {
       pendingDappApprovals.delete(id);
+      const rejectAudit: AuditEvent["type"] =
+        pending.kind === "connect" || pending.kind === "tron_connect"
+          ? "site_rejected"
+          : pending.kind === "switch_chain"
+            ? "chain_switch_rejected"
+            : pending.kind === "switch_account"
+              ? "account_switch_rejected"
+              : "method_rejected";
+      void auditLog({ type: rejectAudit, at: new Date().toISOString(), origin: pending.origin });
       pending.reject({ code: 4001, message: "User rejected the request." });
     }
 
