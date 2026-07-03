@@ -37,6 +37,20 @@ on the Stage 4 backup / locked-approval / watch-only scenarios.
 - [ ] A wallet created before this release (no backup metadata) shows a reminder
       banner but is **not** blocked from send/swap/bridge.
 
+## Swap / bridge (Stage 6)
+- [ ] Swap quote shows: you pay / receive / minimum received / network fee /
+      simpl fee (when applied) / price impact / slippage / route / quote expiry
+- [ ] Quote expiry countdown → on expiry, Confirm is disabled until refresh
+- [ ] High slippage (>5%) requires an explicit danger acknowledgement; >15% blocked
+- [ ] High price impact (≥5%) requires ack; ≥15% blocked
+- [ ] Insufficient balance / insufficient native gas → clear blocking error, no send
+- [ ] Token needing approval → approval step shown before swap
+- [ ] Provider unavailable / no route → normalized message + retry, not a raw error
+- [ ] Pancake fallback (when 0x unavailable) shows a fallback warning; no silent fee claim
+- [ ] Bridge (LI.FI): source chain / destination chain / est. time / source status /
+      destination pending → confirmed; invalid destination address blocked
+- [ ] Watch-only / locked / unverified-backup account cannot reach swap/bridge confirm
+
 ## Production build
 - [ ] `npm run build` → load `dist/` unpacked → no console errors; the
       permissions shown are only the host allowlist (no "all sites"); no

@@ -5,6 +5,7 @@ import {
   BNB_SMART_CHAIN_ID,
   getRequiredChainById,
 } from "../networks/chain-registry";
+import { clampSlippageBps as clampSlippageBpsPolicy } from "../trade/slippage-policy";
 import {
   ZERO_X_NATIVE_TOKEN_ADDRESS,
   type GetZeroXSwapPriceParams,
@@ -71,12 +72,10 @@ function buildPancakePath(input: {
   return [sell, BSC_WBNB_ADDRESS, buy];
 }
 
+// Delegates to the shared slippage policy so the fallback router can never
+// silently apply the old 50% ceiling — capped at ABSOLUTE_MAX_SLIPPAGE_BPS (15%).
 function clampSlippageBps(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
-    return 50;
-  }
-
-  return Math.min(5000, Math.max(1, Math.trunc(value ?? 50)));
+  return clampSlippageBpsPolicy(value);
 }
 
 function applySlippage(amount: bigint, slippageBps: number | undefined): bigint {

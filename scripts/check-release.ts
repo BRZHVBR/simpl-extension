@@ -25,6 +25,7 @@ const steps: Step[] = [
   { name: "Backup / risk policy", cmd: "npm run --silent check:risk" },
   { name: "Endpoint inventory", cmd: "npm run --silent check:endpoints" },
   { name: "Proxy / provider secrets", cmd: "npm run --silent check:proxy" },
+  { name: "Swap/bridge reliability", cmd: "npm run --silent check:trade" },
   { name: "Privacy / storage / logs", cmd: "npm run --silent check:privacy" },
   { name: "Manifest release validation", cmd: "npm run --silent check:manifest" },
   { name: "dApp permission regression", cmd: "npm run --silent check:dapp" },

@@ -9,6 +9,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
+import { getFeePolicy, feeIsProductionSafe } from "../src/core/trade/fee-policy";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 
@@ -59,6 +61,22 @@ const jup = read("src/core/swaps/solana-swap.service.ts");
 check(
   "Solana swap base defaults to the Simpl gateway",
   /["']https:\/\/api\.getsimpl\.io["']/.test(jup),
+);
+
+// ── fee enforcement matrix ───────────────────────────────────────────────────
+console.log("\nFee enforcement matrix:");
+check(
+  "LI.FI bridge fee is backend_authoritative (never client-authoritative)",
+  getFeePolicy("lifi", "bridge")?.enforcement === "backend_authoritative",
+);
+check(
+  "0x swap fee is provider_enforced (not client-tamperable)",
+  getFeePolicy("zeroex", "swap")?.enforcement === "provider_enforced",
+);
+check(
+  "Pancake fallback carries no simpl fee (not a monetized production route)",
+  getFeePolicy("pancake", "swap")?.enforcement === "unsupported" &&
+    !feeIsProductionSafe(getFeePolicy("pancake", "swap")!),
 );
 
 // ── build-time env secrets ───────────────────────────────────────────────────
