@@ -1019,6 +1019,13 @@ export const ptBR: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Confirme que sua frase de recuperação está anotada e guardada com segurança offline.",
   "backup.revealRecoveryPhrase": "Revelar frase de recuperação",
+  "backup.remindLater": "Lembrar mais tarde",
+  "home.backupTitle": "Faça backup da sua frase de recuperação",
+  "home.backupBody": "Sua frase de recuperação ainda não foi verificada. Faça o backup antes de enviar, trocar, fazer bridge ou conectar a dApps.",
+  "home.backupCta": "Fazer backup agora",
+  "send.backupRequiredTitle": "Primeiro faça backup da sua frase de recuperação",
+  "send.backupRequiredBody": "A simpl não pode recuperar sua carteira se esta frase for perdida. Verifique seu backup antes de enviar.",
+  "approval.openWalletToUnlock": "Abrir carteira",
   "backup.writeItDown": "Anote",
   "backup.shareWarning":
     "Nunca compartilhe esta frase com ninguém. A simpl pedirá que você selecione três palavras aleatórias a seguir.",

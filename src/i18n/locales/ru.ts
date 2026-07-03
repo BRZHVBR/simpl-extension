@@ -1014,6 +1014,13 @@ export const ru: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Убедитесь, что ваша фраза восстановления записана и надёжно хранится офлайн.",
   "backup.revealRecoveryPhrase": "Показать фразу восстановления",
+  "backup.remindLater": "Напомнить позже",
+  "home.backupTitle": "Сохраните фразу восстановления",
+  "home.backupBody": "Ваша фраза восстановления ещё не подтверждена. Сохраните её перед отправкой, обменом, бриджем или подключением к dApp.",
+  "home.backupCta": "Сохранить сейчас",
+  "send.backupRequiredTitle": "Сначала сохраните фразу восстановления",
+  "send.backupRequiredBody": "simpl не сможет восстановить кошелёк, если эта фраза потеряна. Подтвердите резервную копию перед отправкой.",
+  "approval.openWalletToUnlock": "Открыть кошелёк",
   "backup.writeItDown": "Запишите её",
   "backup.shareWarning":
     "Никогда не делитесь этой фразой ни с кем. Далее simpl попросит вас выбрать три случайных слова.",

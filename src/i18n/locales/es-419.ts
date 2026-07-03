@@ -1020,6 +1020,13 @@ export const es419: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Confirma que tu frase de recuperación está anotada y guardada de forma segura sin conexión.",
   "backup.revealRecoveryPhrase": "Mostrar frase de recuperación",
+  "backup.remindLater": "Recordarme más tarde",
+  "home.backupTitle": "Respalda tu frase de recuperación",
+  "home.backupBody": "Tu frase de recuperación aún no está verificada. Respáldala antes de enviar, intercambiar, hacer bridge o conectarte a dApps.",
+  "home.backupCta": "Respaldar ahora",
+  "send.backupRequiredTitle": "Primero respalda tu frase de recuperación",
+  "send.backupRequiredBody": "simpl no puede recuperar tu billetera si pierdes esta frase. Verifica tu respaldo antes de enviar.",
+  "approval.openWalletToUnlock": "Abrir billetera",
   "backup.writeItDown": "Anótala",
   "backup.shareWarning":
     "Nunca compartas esta frase con nadie. simpl te pedirá que selecciones tres palabras al azar a continuación.",

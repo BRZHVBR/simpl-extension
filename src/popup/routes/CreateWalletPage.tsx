@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { walletService } from "../../core/wallet/wallet.service";
 import { useTranslation } from "../../i18n";
+import { initialBackupStatus, toSecuritySettingsPatch } from "../../core/security/backup-status";
 
 type CreateWalletPageProps = {
   onCreated: () => void | Promise<void>;
@@ -42,7 +43,10 @@ async function recordSeedBackupPending(): Promise<void> {
   const storage = getChromeStorageLocal();
   const get = storage?.get;
   const set = storage?.set;
-  const patch = { seedBackupConfirmed: false, seedBackupVerified: false };
+  // Fresh mnemonic wallet → required, unverified. The App-level gate keys off
+  // this v2 status (and its absence of `skippedAt`) to steer the user into the
+  // seed-verification flow before Home.
+  const patch = toSecuritySettingsPatch(initialBackupStatus("mnemonic"));
 
   const stored = await new Promise<Record<string, unknown>>((resolve) => {
     if (!get) {

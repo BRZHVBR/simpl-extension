@@ -101,16 +101,35 @@ See `docs/connected-sites-permissions.md`. Highlights:
 - A capped, local-only audit trail (`permissionAuditLog`) records connect/revoke/
   approve/reject events with only public identifiers.
 
+### Seed backup enforcement, locked approval & risk controls (Stage 4)
+
+See `docs/backup-and-recovery.md`. Summary:
+
+- Fresh mnemonic wallets are gated into seed verification (random-word quiz)
+  before Home and cannot silently skip it; migrated wallets get a reminder, not
+  a block. Verified status is stored (v2 `backupStatus` + legacy mirror) and
+  shown in the Security Center + a Home banner.
+- A shared risk policy (`src/core/security/risk-policy.ts`) decides
+  allow/warn/block per action; fresh-unverified mnemonics are blocked from
+  send/swap/bridge/WC (enforced in SendPage + the provider layer).
+- Watch-only accounts are rejected from dApp signing/sending up-front (clear
+  error, no dead approval).
+- Locked approvals are not a dead-end: signing uses an inline per-action
+  password; the no-account locked screen offers "Open wallet"; closing an
+  approval window safely rejects the pending request; unlock never auto-approves.
+
 ### Automated release gate — `npm run check:release`
 
 Runs: `typecheck` · `check:i18n` · `check:walletconnect` · `check:permissions` ·
-`check:privacy` · `check:manifest` · `check:dapp` · `check:security` · production
-`build`. Each sub-check fails the gate (exit 1) on regression:
+`check:risk` · `check:privacy` · `check:manifest` · `check:dapp` ·
+`check:security` · production `build`. Each sub-check fails the gate (exit 1) on
+regression:
 
 | Check | Guards against |
 | --- | --- |
 | `check:walletconnect` | WC auto-approve; connectedSites written before approve; unsupported required method/chain; unfiltered optional methods; approve/reject not clearing pending; WC session not stored/guarded as a scoped permission |
 | `check:permissions` | v1→v2 migration granting broad access; broken scope predicates / grant / revoke / expiry; uncapped audit log |
+| `check:risk` | backup status misclassification (fresh vs migrated); risk policy letting watch-only sign, unverified mnemonic send, or locked/unsupported-chain actions through |
 | `check:privacy` | raw WC proposal/request payload storage keys; `*_DEBUG = true`; secrets in `console.*` |
 | `check:manifest` | `<all_urls>` in `host_permissions`; missing/dead hosts; `nativeMessaging` without a host; missing permission/endpoint docs |
 | `check:dapp` | `simpl_switchAccount`/`simpl_switchChain` bypassing approval; sensitive methods without an active-permission guard; missing account/chain/method scoping; revoke not removing access |

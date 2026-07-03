@@ -1014,6 +1014,13 @@ export const uk: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Підтвердіть, що вашу фразу відновлення записано та надійно збережено офлайн.",
   "backup.revealRecoveryPhrase": "Розкрити фразу відновлення",
+  "backup.remindLater": "Нагадати пізніше",
+  "home.backupTitle": "Збережіть фразу відновлення",
+  "home.backupBody": "Вашу фразу відновлення ще не підтверджено. Збережіть її перед надсиланням, обміном, бриджем чи підключенням до dApp.",
+  "home.backupCta": "Зберегти зараз",
+  "send.backupRequiredTitle": "Спершу збережіть фразу відновлення",
+  "send.backupRequiredBody": "simpl не зможе відновити гаманець, якщо цю фразу втрачено. Підтвердьте резервну копію перед надсиланням.",
+  "approval.openWalletToUnlock": "Відкрити гаманець",
   "backup.writeItDown": "Запишіть її",
   "backup.shareWarning":
     "Ніколи не діліться цією фразою ні з ким. Далі simpl попросить вас вибрати три випадкові слова.",

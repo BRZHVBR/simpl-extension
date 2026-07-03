@@ -122,6 +122,14 @@ check("eth_sendTransaction checks method + chain + account permission",
 check("connect approval grants a scoped permission",
   /grantInjectedEvmPermission|grantConnectedSitePermission/.test(sw));
 
+// ── watch-only cannot sign/send via dApp (rejected early, no approval) ──────
+console.log("\nWatch-only dApp guard:");
+check(
+  "watch-only signing/send is rejected before opening an approval",
+  /isWatchOnly[\s\S]{0,200}personal_sign[\s\S]{0,200}eth_sendTransaction[\s\S]{0,200}cannot sign/.test(sw) ||
+    /isWatchOnly\s*&&[\s\S]{0,300}sendResponse[\s\S]{0,200}cannot sign transactions/.test(sw),
+);
+
 // ── revoke removes access ────────────────────────────────────────────────────
 console.log("\nRevoke:");
 check(

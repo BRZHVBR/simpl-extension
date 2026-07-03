@@ -917,6 +917,26 @@ async function handleDappRequest(
     const bootstrap = await walletService.bootstrap();
     const address = bootstrap.selectedAccount?.address ?? null;
     const chainId = bootstrap.walletState.selectedChainId;
+    const isWatchOnly = bootstrap.selectedAccount?.type === "watch";
+
+    // Watch-only accounts cannot sign or send. Reject up-front with a clear
+    // error instead of opening a signing approval that can never succeed.
+    if (
+      isWatchOnly &&
+      (method === "personal_sign" ||
+        method === "eth_signTypedData_v4" ||
+        method === "eth_sendTransaction")
+    ) {
+      sendResponse({
+        ok: false,
+        error: {
+          code: 4100,
+          message:
+            "Watch-only accounts can view balances and activity, but cannot sign transactions.",
+        },
+      });
+      return;
+    }
 
     switch (method) {
       case "eth_accounts": {

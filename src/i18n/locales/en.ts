@@ -1020,6 +1020,13 @@ export const en = {
   "backup.verifyHeroSub":
     "Confirm that your recovery phrase is written down and stored safely offline.",
   "backup.revealRecoveryPhrase": "Reveal recovery phrase",
+  "backup.remindLater": "Remind me later",
+  "home.backupTitle": "Back up your recovery phrase",
+  "home.backupBody": "Your recovery phrase is not verified yet. Back it up before sending, swapping, bridging, or connecting to dApps.",
+  "home.backupCta": "Back up now",
+  "send.backupRequiredTitle": "Back up your recovery phrase first",
+  "send.backupRequiredBody": "simpl cannot recover your wallet if this phrase is lost. Verify your backup before sending.",
+  "approval.openWalletToUnlock": "Open wallet",
   "backup.writeItDown": "Write it down",
   "backup.shareWarning":
     "Never share this phrase with anyone. simpl will ask you to select three random words next.",

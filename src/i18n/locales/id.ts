@@ -1010,6 +1010,13 @@ export const id: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Konfirmasikan bahwa frasa pemulihan Anda telah dicatat dan disimpan dengan aman secara offline.",
   "backup.revealRecoveryPhrase": "Tampilkan frasa pemulihan",
+  "backup.remindLater": "Ingatkan nanti",
+  "home.backupTitle": "Cadangkan frasa pemulihan Anda",
+  "home.backupBody": "Frasa pemulihan Anda belum diverifikasi. Cadangkan sebelum mengirim, menukar, bridging, atau menghubungkan ke dApp.",
+  "home.backupCta": "Cadangkan sekarang",
+  "send.backupRequiredTitle": "Cadangkan frasa pemulihan Anda dulu",
+  "send.backupRequiredBody": "simpl tidak dapat memulihkan dompet jika frasa ini hilang. Verifikasi cadangan Anda sebelum mengirim.",
+  "approval.openWalletToUnlock": "Buka dompet",
   "backup.writeItDown": "Catat",
   "backup.shareWarning":
     "Jangan pernah membagikan frasa ini kepada siapa pun. simpl akan meminta Anda memilih tiga kata acak berikutnya.",

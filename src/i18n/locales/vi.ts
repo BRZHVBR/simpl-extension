@@ -1011,6 +1011,13 @@ export const vi: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Xác nhận rằng cụm từ khôi phục của bạn đã được ghi lại và lưu trữ an toàn ngoại tuyến.",
   "backup.revealRecoveryPhrase": "Hiển thị cụm từ khôi phục",
+  "backup.remindLater": "Nhắc tôi sau",
+  "home.backupTitle": "Sao lưu cụm từ khôi phục của bạn",
+  "home.backupBody": "Cụm từ khôi phục của bạn chưa được xác minh. Hãy sao lưu trước khi gửi, hoán đổi, bắc cầu hoặc kết nối với dApp.",
+  "home.backupCta": "Sao lưu ngay",
+  "send.backupRequiredTitle": "Hãy sao lưu cụm từ khôi phục trước",
+  "send.backupRequiredBody": "simpl không thể khôi phục ví nếu mất cụm từ này. Hãy xác minh bản sao lưu trước khi gửi.",
+  "approval.openWalletToUnlock": "Mở ví",
   "backup.writeItDown": "Ghi lại",
   "backup.shareWarning":
     "Đừng bao giờ chia sẻ cụm từ này với bất kỳ ai. simpl sẽ yêu cầu bạn chọn ba từ ngẫu nhiên tiếp theo.",

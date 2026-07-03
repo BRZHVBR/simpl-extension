@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { isAddress, keccak256 } from "ethers";
 import { useTranslation } from "../../i18n";
+import { parseBackupStatus, isMigratedUnknown } from "../../core/security/backup-status";
+import { evaluateRiskAction } from "../../core/security/risk-policy";
 import type { WalletAccount } from "../../core/accounts/account.types";
 import type { WalletState } from "../../core/storage/storage.types";
 import type { WalletAssetBalance } from "../../core/tokens/token-balance.service";
@@ -637,6 +639,48 @@ export function SendPage({
   const amountCanBeConverted = amountMode === "asset" || assetUsdPrice !== null;
   const isWatchOnly = selectedAccount.type === "watch";
 
+  // Seed-backup risk gate: a fresh (known-unverified) mnemonic wallet must back
+  // up before sending. Migrated/unknown wallets are only warned, not blocked
+  // (evaluateRiskAction returns allowed:true for them), so this stays false.
+  const [backupBlocked, setBackupBlocked] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const local = (globalThis as unknown as {
+        chrome?: { storage?: { local?: { get?: (k: string[], cb: (i: Record<string, unknown>) => void) => void } } };
+      }).chrome?.storage?.local;
+      const get = local?.get;
+      let settings: unknown;
+      if (get) {
+        settings = await new Promise((resolve) => {
+          try {
+            get.call(local, ["securitySettings"], (i) => resolve(i?.securitySettings));
+          } catch {
+            resolve(undefined);
+          }
+        });
+      }
+      const decision = evaluateRiskAction("send", {
+        locked: false,
+        watchOnly: selectedAccount.type === "watch",
+        secretKind:
+          selectedAccount.type === "watch"
+            ? "watch"
+            : selectedAccount.type === "privateKey"
+              ? "privateKey"
+              : "mnemonic",
+        backup: parseBackupStatus(settings),
+        backupUnknown: isMigratedUnknown(settings),
+      });
+      if (!cancelled) {
+        setBackupBlocked(!decision.allowed && decision.requiredAction === "backup");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAccount]);
+
   // The display/history "from" address for the active chain. Non-EVM families
   // resolve a derived address through the service; EVM uses the stored address.
   const fromAddress = isTron
@@ -1115,6 +1159,30 @@ export function SendPage({
           <div className="watch-only-guard__text">
             {t("send.watchOnlyDescription")}
           </div>
+          <button className="btn secondary lg full" type="button" onClick={onBack}>
+            {t("common.backToWallet")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Fresh unverified mnemonic → block sending until the recovery phrase is
+  // backed up (risk policy). Migrated wallets are only warned, so never land here.
+  if (backupBlocked) {
+    return (
+      <div className="ext-popup send-page" data-screen-label="09 Send – Backup required">
+        <div className="bar-top">
+          <button className="icbtn" type="button" onClick={onBack}>
+            <BackIcon />
+          </button>
+          <div style={{ fontSize: 13, fontWeight: 650, color: "var(--ink-1)" }}>
+            {t("send.title")}
+          </div>
+        </div>
+        <div className="screen-body watch-only-guard">
+          <div className="watch-only-guard__title">{t("send.backupRequiredTitle")}</div>
+          <div className="watch-only-guard__text">{t("send.backupRequiredBody")}</div>
           <button className="btn secondary lg full" type="button" onClick={onBack}>
             {t("common.backToWallet")}
           </button>

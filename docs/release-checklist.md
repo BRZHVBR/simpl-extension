@@ -17,6 +17,7 @@ Runs, fail-fast, in order:
 | i18n | `npm run check:i18n` | All 8 locales key-complete |
 | WalletConnect approval | `npm run check:walletconnect` | Explicit-approval model (no auto-approve, no connect-before-approve, allowlist, approve/reject clear pending, WC sessions stored/guarded as scoped permissions) |
 | Permission model | `npm run check:permissions` | v1→v2 migration safety, scope predicates, grant/revoke/expiry, audit-log cap |
+| Backup / risk policy | `npm run check:risk` | backup-status classification + risk-policy (watch-only, locked, unsupported chain, unverified-mnemonic) |
 | Privacy | `npm run check:privacy` | No raw WC payload storage, no hard-enabled debug flags, no secret logging |
 | Manifest | `npm run check:manifest` | No `<all_urls>` host_permissions, no unshipped `nativeMessaging`, docs present |
 | dApp permissions | `npm run check:dapp` | `simpl_switchAccount`/`switchChain` approval-gated; sensitive methods guarded; revoke works |
@@ -32,11 +33,23 @@ Load the unpacked production build from `dist/` in `chrome://extensions`.
 ### Fresh install & vault
 - [ ] Fresh install → onboarding shows; no console errors
 - [ ] Create wallet → password step enforces policy; seed shown
-- [ ] Backup step shows the verification reminder; Security Center reports the
-      seed as **not verified** until verification is completed
-- [ ] Seed backup verification flow marks it verified
+- [ ] After create, the wallet is routed into seed **verification**, not straight to Home
+- [ ] "Remind me later" is explicit → lands on Home with a backup banner
+- [ ] Cannot mark verified without selecting the correct random words
+- [ ] Verification success → Security Center shows verified + date; Home banner gone
+- [ ] Close the app mid-verification → next open still shows backup-required
+- [ ] Fresh unverified wallet: Send is blocked (backup-required screen); swap/bridge/WC blocked
+- [ ] Migrated wallet (pre-existing) → reminder banner only, Send/Swap NOT blocked
 - [ ] Lock → unlock with password works; wrong password rejected
-- [ ] Watch-only account (if used) cannot reach the signing path
+- [ ] Watch-only account cannot reach the signing path (Send/Swap/Bridge guarded)
+
+### Locked approval & watch-only dApp
+- [ ] Open a dApp connect/sign approval → password field present; approve is explicit
+- [ ] No-account "locked" approval screen offers **Open wallet** (not a dead-end)
+- [ ] Close an approval window → the dApp request is rejected (not left hanging)
+- [ ] WalletConnect proposal window closed without acting → no session created
+- [ ] Watch-only account: a dApp `personal_sign` / `eth_sendTransaction` is rejected
+      with a clear error (no pointless approval opens)
 
 ### dApp (injected provider)
 - [ ] Connect from a dApp → approval popup; **Approve** connects, **Reject** does not

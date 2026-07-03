@@ -1015,6 +1015,13 @@ export const tr: TranslationDictionary = {
   "backup.verifyHeroSub":
     "Kurtarma ifadenizin yazıldığını ve çevrimdışı güvenli bir şekilde saklandığını onaylayın.",
   "backup.revealRecoveryPhrase": "Kurtarma ifadesini göster",
+  "backup.remindLater": "Sonra hatırlat",
+  "home.backupTitle": "Kurtarma ifadenizi yedekleyin",
+  "home.backupBody": "Kurtarma ifadeniz henüz doğrulanmadı. Göndermeden, takas etmeden, köprülemeden veya dApp'lere bağlanmadan önce yedekleyin.",
+  "home.backupCta": "Şimdi yedekle",
+  "send.backupRequiredTitle": "Önce kurtarma ifadenizi yedekleyin",
+  "send.backupRequiredBody": "Bu ifade kaybolursa simpl cüzdanınızı kurtaramaz. Göndermeden önce yedeğinizi doğrulayın.",
+  "approval.openWalletToUnlock": "Cüzdanı aç",
   "backup.writeItDown": "Yazın",
   "backup.shareWarning":
     "Bu ifadeyi asla kimseyle paylaşmayın. simpl bir sonraki adımda sizden rastgele üç kelime seçmenizi isteyecek.",
