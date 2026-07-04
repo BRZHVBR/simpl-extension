@@ -14,6 +14,8 @@
     "paths": {
       "@getsimpl/core": ["../getsimpl-core/packages/core/src/index.ts"],
       "@getsimpl/chains": ["../getsimpl-core/packages/chains/src/index.ts"],
+      "@getsimpl/config": ["../getsimpl-core/packages/config/src/index.ts"],
+      "@getsimpl/tokens": ["../getsimpl-core/packages/tokens/src/index.ts"],
       "@getsimpl/formatters": ["../getsimpl-core/packages/formatters/src/index.ts"],
       "@getsimpl/accounts": ["../getsimpl-core/packages/accounts/src/index.ts"],
       "@getsimpl/assets": ["../getsimpl-core/packages/assets/src/index.ts"],

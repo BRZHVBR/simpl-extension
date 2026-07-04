@@ -11,6 +11,7 @@ import "../ui/claude/styles/runtime-overrides.css";
 
 import { initThemeEarly } from "../core/theme/theme";
 import { initLocaleEarly } from "../i18n";
+import { refreshRuntimeConfig } from "../core/config/runtime-config.service";
 import { storageRepository } from "../core/storage/storage.repository";
 import { openFullscreenApp } from "./surface-actions";
 
@@ -18,6 +19,11 @@ import { openFullscreenApp } from "./surface-actions";
 // of the light theme / English text.
 initThemeEarly();
 initLocaleEarly();
+
+// Warm the runtime config (feature flags / catalog logos). Fire-and-forget:
+// it never throws, never blocks the first render, and falls back to the
+// embedded config when the gateway is unreachable.
+void refreshRuntimeConfig();
 
 const isFullscreenSurface =
   new URLSearchParams(window.location.search).get("surface") === "fullscreen";

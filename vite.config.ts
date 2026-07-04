@@ -16,6 +16,9 @@ export default defineConfig({
     alias: {
       "@getsimpl/core": corePkg("core"),
       "@getsimpl/chains": corePkg("chains"),
+      // @getsimpl/config depends on @getsimpl/tokens, so both are aliased.
+      "@getsimpl/config": corePkg("config"),
+      "@getsimpl/tokens": corePkg("tokens"),
       "@getsimpl/formatters": corePkg("formatters"),
       "@getsimpl/accounts": corePkg("accounts"),
       "@getsimpl/assets": corePkg("assets"),
