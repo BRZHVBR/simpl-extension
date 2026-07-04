@@ -25,6 +25,7 @@
     "check:endpoints": "tsx scripts/check-endpoints.ts",
     "check:proxy": "tsx scripts/check-proxy.ts",
     "check:trade": "tsx scripts/check-trade.ts",
+    "check:runtime-config": "tsx scripts/check-runtime-config.ts",
     "check:ui": "tsx scripts/check-ui.ts",
     "check:assets": "tsx scripts/check-assets.ts",
     "check:bundle": "tsx scripts/check-bundle.ts",

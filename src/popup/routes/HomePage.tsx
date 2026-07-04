@@ -63,6 +63,7 @@ import {
   transactionHistoryService,
   type TransactionHistoryItem,
 } from "../../core/transactions/transaction-history.service";
+import { isRemoteFeatureEnabled } from "../../core/config/feature-gate";
 import { useTranslation, t } from "../../i18n";
 
 type CachedPortfolio = {
@@ -633,6 +634,13 @@ export function HomePage(props: HomePageProps) {
 
   const selectedAddress = props.selectedAccount?.address ?? null;
   const selectedChainId = props.walletState.selectedChainId;
+
+  // Remote feature gates (runtime config). Fail-open: with no server config
+  // (snapshot null / embedded fallback) both stay true — current behavior.
+  // Read per render: the snapshot is warmed at popup start and this component
+  // re-renders continuously (balances/prices), so a landed config applies.
+  const remoteSwapsEnabled = isRemoteFeatureEnabled("swaps");
+  const remoteBridgeEnabled = isRemoteFeatureEnabled("bridge");
 
   // Seed-backup reminder banner state. Reads the persisted backup status; the
   // banner shows for a non-watch wallet whose recovery phrase still needs backup
@@ -2078,6 +2086,12 @@ export function HomePage(props: HomePageProps) {
                     type="button"
                     className="asset-action-btn asset-action-btn--outline"
                     onClick={handleSwapFromDetails}
+                    // Remote gate: a TRON asset's "Swap" actually opens the
+                    // cross-chain bridge (see App.openSwapPage), so it follows
+                    // the bridge flag; everything else follows swaps.
+                    disabled={
+                      isBridgeSource ? !remoteBridgeEnabled : !remoteSwapsEnabled
+                    }
                   >
                     {t("home.swap")}
                   </button>
@@ -2304,6 +2318,9 @@ export function HomePage(props: HomePageProps) {
                 className="action"
                 type="button"
                 onClick={() => props.onSwap()}
+                // Remote gate (runtime config): server-disabled swaps grey the
+                // button out, exactly like Send with no sendable asset.
+                disabled={!remoteSwapsEnabled}
               >
                 <SimpleInstrumentIcon instrument="swap" iconSize={16} />
                 <span className="a-lbl">{t("home.swap")}</span>

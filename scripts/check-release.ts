@@ -26,6 +26,7 @@ const steps: Step[] = [
   { name: "Endpoint inventory", cmd: "npm run --silent check:endpoints" },
   { name: "Proxy / provider secrets", cmd: "npm run --silent check:proxy" },
   { name: "Swap/bridge reliability", cmd: "npm run --silent check:trade" },
+  { name: "Runtime config fallback", cmd: "npm run --silent check:runtime-config" },
   { name: "UI primitives / chain labels", cmd: "npm run --silent check:ui" },
   { name: "Asset budget", cmd: "npm run --silent check:assets" },
   { name: "Store docs consistency", cmd: "npm run --silent check:store-docs" },

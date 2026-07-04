@@ -252,7 +252,7 @@ export const KNOWN_PRICE_ASSETS: Record<string, KnownPriceAsset> = {
     canHaveChart: false,
     isStable: true,
   },
-  "8453:0x4d13a9b2a5ada3b52f36e4ccdb91023f3d05ec6e": {
+  "8453:0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": {
     symbol: "USDT",
     coinGeckoId: "tether",
     canHaveChart: false,

@@ -44,7 +44,7 @@ they are declared explicitly. `host_permissions` no longer uses `<all_urls>`.
 | `api.devnet.solana.com` | Solana devnet RPC | `chains/solana/solana.config.ts`, chain-registry |
 | `api.trongrid.io` | TRON JSON-RPC / TronGrid API | chain-registry, TRON adapter |
 | `blockstream.info` | Bitcoin Esplora API (mainnet `/api`, testnet `/testnet/api`) | chain-registry, BTC adapter |
-| `api.getsimpl.io` | **Primary gateway** — prices/charts, TON RPC (`/v1/ton`), Solana portfolio, LI.FI bridge proxy, swap proxy, provider health | `core/prices/*`, `core/bridge/lifi-bridge.service.ts`, `core/swaps/*`, `core/ton/*`, `chains/solana/solana.portfolio-api.ts`, `core/api/provider-health.service.ts` |
+| `api.getsimpl.io` | **Primary gateway** — prices/charts, TON RPC (`/v1/ton`), Solana portfolio, LI.FI bridge proxy, swap proxy, provider health, runtime config (`/v1/config/runtime`) | `core/prices/*`, `core/bridge/lifi-bridge.service.ts`, `core/swaps/*`, `core/ton/*`, `chains/solana/solana.portfolio-api.ts`, `core/api/provider-health.service.ts`, `core/config/runtime-config.service.ts` |
 | `api.0x.org` | 0x swap API — **production must use the Simpl swap proxy**; direct calls (with a client-side `0x-api-key`) are a DEV-only fallback and `getZeroXBaseUrl()` throws in a production build if the proxy is unset | `core/swap/zeroXSwapService.ts` |
 | `*.walletconnect.com`, `*.walletconnect.org` | WalletConnect verify / explorer / relay-discovery over HTTPS (relay itself is WSS, governed by CSP) | `@reown/walletkit` + `@walletconnect/core` in `background/walletconnect-offscreen.ts` |
 | `arweave.net`, `ipfs.io`, `cloudflare-ipfs.com`, `dweb.link`, `gateway.pinata.cloud` | Solana off-chain token/NFT **metadata JSON** gateways | `chains/solana/solana.tokens.ts` |

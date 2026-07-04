@@ -1,5 +1,7 @@
 // src/utils/token-logo-resolver.ts
 import { getAddress } from "ethers";
+import { findConfigAsset } from "@getsimpl/config";
+import { getCachedRuntimeConfigSnapshot } from "../core/config/runtime-config.service";
 
 // Slug used by the Trust Wallet asset CDN for each supported chain
 const TRUST_WALLET_CHAIN_SLUGS: Record<number, string> = {
@@ -118,8 +120,9 @@ export type TokenLogoAsset = {
  * Returns an ordered list of external logo URL candidates for a token:
  *   1. Explicit logoURI / logoUrl from the asset object
  *   2. localStorage token logo cache (survives page reloads)
- *   3. Trust Wallet CDN (assets.trustwalletapp.com)
- *   4. 1inch token logo CDN (tokens.1inch.io)
+ *   3. Runtime-config catalog logo (Simpl Discover catalog, when available)
+ *   4. Trust Wallet CDN (assets.trustwalletapp.com)
+ *   5. 1inch token logo CDN (tokens.1inch.io)
  *
  * Does not include hardcoded local icons — AssetIcon handles those first
  * since they are UI-layer concerns that need no network request.
@@ -138,7 +141,23 @@ export function resolveTokenLogoCandidates(asset: TokenLogoAsset): string[] {
     if (cached && !candidates.includes(cached)) {
       candidates.push(cached);
     }
+  }
 
+  // Curated catalog logo from the runtime config, ahead of the generic CDNs.
+  // The snapshot is synchronous and may be null on the very first render (the
+  // config is still resolving) — then there is simply no catalog candidate.
+  // isSafeLogoUrl keeps the https-only policy, exactly like every other source.
+  if (asset.chainId) {
+    const config = getCachedRuntimeConfigSnapshot();
+    if (config) {
+      const configLogo = findConfigAsset(config, asset.chainId, addr ?? null)?.logoUrl;
+      if (configLogo && isSafeLogoUrl(configLogo) && !candidates.includes(configLogo)) {
+        candidates.push(configLogo);
+      }
+    }
+  }
+
+  if (addr && asset.chainId) {
     const twUrl = getTrustWalletLogoUrl(asset.chainId, addr);
     if (twUrl && !candidates.includes(twUrl)) {
       candidates.push(twUrl);
