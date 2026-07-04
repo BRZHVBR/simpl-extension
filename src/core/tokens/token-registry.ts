@@ -189,7 +189,11 @@ export const REGISTERED_TOKENS: RegisteredToken[] = [
   },
   {
     chainId: BASE_CHAIN_ID,
-    address: "0x4D13a9b2a5adA3B52F36E4CcdB91023F3d05EC6e",
+    // L2 standard bridged USDT (basescan-verified). The address shipped before
+    // (0x4D13a9b2a5adA3B52F36E4CcdB91023F3d05EC6e) is a dead contract on Base:
+    // no metadata, 0 holders, 0 transfers — an alwaysShow row that could never
+    // hold a balance.
+    address: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
     symbol: "USDT",
     name: "Tether USD",
     decimals: 6,
