@@ -39,6 +39,16 @@ import {
   CrossChainTokenPicker,
   type PickerToken,
 } from "../components/CrossChainTokenPicker";
+import {
+  isSwapAssetAllowed,
+  toConfigChainId,
+} from "../../core/config/swap-asset-availability";
+import { configAssetSeeds } from "../../core/config/config-asset-seeds";
+import {
+  useBridgeAssetAllowlist,
+  useSwapAssetAllowlist,
+} from "../hooks/useSwapAssetAllowlist";
+import { useRuntimeConfigSnapshot } from "../hooks/useRuntimeChains";
 import { BridgePage } from "./BridgePage";
 import "./SwapPage.css";
 
@@ -175,6 +185,28 @@ export function SolanaSwapPage({
     () => getRequiredSolanaConfigByChainId(selectedChainId),
     [selectedChainId],
   );
+  // Stage 3 runtime-config projection: admin-allowed swap/bridge assets.
+  // null → no gating (offline / fallback / seed config), lists behave exactly
+  // as before. A same-chain (Solana) pick executes as a swap → swap toggle; a
+  // cross-chain pick executes as a bridge → bridge toggle.
+  const runtimeConfig = useRuntimeConfigSnapshot();
+  const swapAllowlist = useSwapAssetAllowlist();
+  const bridgeAllowlist = useBridgeAssetAllowlist();
+  const isPickerTokenAllowed = useMemo(
+    () =>
+      swapAllowlist || bridgeAllowlist
+        ? (token: PickerToken) => {
+            const sameChain =
+              toConfigChainId(token.chainId) === toConfigChainId(selectedChainId);
+            return isSwapAssetAllowed(sameChain ? swapAllowlist : bridgeAllowlist, {
+              chainId: token.chainId,
+              address: token.address,
+              isNative: token.isNative,
+            });
+          }
+        : undefined,
+    [swapAllowlist, bridgeAllowlist, selectedChainId],
+  );
 
   const solanaAddress =
     selectedAccount && "solanaAddress" in selectedAccount
@@ -259,6 +291,34 @@ export function SolanaSwapPage({
         });
       }
 
+      // Stage 3b: admin-enabled Solana config assets are selectable even at
+      // zero balance — the admin catalog is a token source, not only a
+      // filter. (The native-SOL seed dedupes via the shared wSOL mint.)
+      for (const s of configAssetSeeds(runtimeConfig, [LIFI_SOLANA_CHAIN_ID])) {
+        if (list.some((t) => t.mint === s.address)) continue;
+        list.push({
+          id: `spl:${selectedChainId}:${s.address}`,
+          symbol: s.symbol,
+          name: s.name,
+          balance: "0",
+          balanceRaw: "0",
+          decimals: s.decimals,
+          isNative: false,
+          mint: s.address,
+          logoUrl: s.logoUrl,
+        });
+      }
+
+      // Stage 3: only admin-allowed assets are offered for swapping (the
+      // SOL/USDC and config seeds obey the allowlist too).
+      list = list.filter((token) =>
+        isSwapAssetAllowed(swapAllowlist, {
+          chainId: selectedChainId,
+          address: token.mint,
+          isNative: token.isNative,
+        }),
+      );
+
       setTokens(list);
       setBalancesKnown(known);
 
@@ -322,7 +382,31 @@ export function SolanaSwapPage({
     return () => {
       active = false;
     };
-  }, [selectedChainId, config, initialToAsset]);
+  }, [selectedChainId, config, initialToAsset, swapAllowlist, runtimeConfig]);
+
+  // Stage 3: re-validate the current picks when the allowlist narrows — the
+  // list effect above preserves an existing selection (cur ?? from), so a
+  // token that became disallowed must be corrected here.
+  useEffect(() => {
+    if (!swapAllowlist) return;
+    const allowed = (token: SolToken | null) =>
+      !token ||
+      isSwapAssetAllowed(swapAllowlist, {
+        chainId: selectedChainId,
+        address: token.mint,
+        isNative: token.isNative,
+      });
+    setFromToken((cur) =>
+      allowed(cur) ? cur : tokens.find((t) => t.isNative) ?? tokens[0] ?? null,
+    );
+    setToToken((cur) =>
+      allowed(cur)
+        ? cur
+        : tokens.find((t) => t.mint === USDC_SOLANA_MINT) ??
+          tokens.find((t) => !t.isNative) ??
+          null,
+    );
+  }, [swapAllowlist, tokens, selectedChainId]);
 
   // Any input change invalidates a prepared order (its blockhash/quote is stale).
   function resetOrder() {
@@ -937,6 +1021,7 @@ export function SolanaSwapPage({
         <CrossChainTokenPicker
           side="to"
           currentChainId={LIFI_SOLANA_CHAIN_ID}
+          isTokenAllowed={isPickerTokenAllowed}
           onSelect={handlePickTo}
           onClose={() => setToPickerOpen(false)}
         />
