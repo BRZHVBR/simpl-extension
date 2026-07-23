@@ -27,6 +27,8 @@ import {
   type BridgeToken,
 } from "../../core/bridge/lifi-bridge.service";
 import { TRON_TOKENS } from "../../chains/tron/tron.tokens";
+import { configAssetSeeds } from "../../core/config/config-asset-seeds";
+import { useRuntimeConfigSnapshot } from "../hooks/useRuntimeChains";
 import { useTranslation } from "../../i18n";
 import { SwapHeader } from "./SwapHeader";
 import { TokenWithChainBadge } from "./TokenWithChainBadge";
@@ -142,6 +144,42 @@ export function CrossChainTokenPicker({
   const { t } = useTranslation();
   const [catalog, setCatalog] = useState<PickerToken[]>([]);
   const [search, setSearch] = useState("");
+
+  // Stage 3b: the admin catalog is itself a token source — swap/bridge-enabled
+  // config assets are seeded into the catalog so an admin-enabled token shows
+  // up even when the LI.FI list lacks it. Provider rows win on dedupe; a
+  // non-db (fallback/seed) config yields no seeds, so offline behavior is
+  // unchanged.
+  const runtimeConfig = useRuntimeConfigSnapshot();
+  const configSeedTokens = useMemo<PickerToken[]>(
+    () =>
+      configAssetSeeds(runtimeConfig, PRODUCTION_CHAINS.map((c) => c.id)).map((s) => ({
+        chainId: s.chainId,
+        chainName: CHAIN_NAME.get(s.chainId) ?? `Chain ${s.chainId}`,
+        address: s.address,
+        isNative: s.isNative,
+        symbol: s.symbol,
+        name: s.name,
+        decimals: s.decimals,
+        logoUrl: s.logoUrl,
+      })),
+    [runtimeConfig],
+  );
+  const fullCatalog = useMemo(() => {
+    if (configSeedTokens.length === 0) return catalog;
+    const seen = new Set(
+      catalog.map((t) => `${t.chainId}:${t.address.toLowerCase()}`),
+    );
+    const out = [...catalog];
+    for (const t of configSeedTokens) {
+      const key = `${t.chainId}:${t.address.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    return out;
+  }, [catalog, configSeedTokens]);
   // "all" | "current" | a specific chain id. Filtering logic below is unchanged —
   // only its UI changed from a scrolling chip row to a compact dropdown selector.
   const [filter, setFilter] = useState<"all" | "current" | number>("all");
@@ -236,7 +274,7 @@ export function CrossChainTokenPicker({
     );
     const seen = new Set<string>();
     const out: PickerToken[] = [];
-    for (const t of catalog) {
+    for (const t of fullCatalog) {
       const key = `${t.chainId}:${t.address.toLowerCase()}`;
       if (heldKeys.has(key) || seen.has(key)) continue;
       if (!matchesChainFilter(t.chainId) || !matchesSearch(t)) continue;
@@ -247,7 +285,7 @@ export function CrossChainTokenPicker({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog, yourAssets, filter, q, currentChainId, isTokenAllowed]);
+  }, [fullCatalog, yourAssets, filter, q, currentChainId, isTokenAllowed]);
 
   const title =
     side === "from"

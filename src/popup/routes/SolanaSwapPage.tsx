@@ -43,10 +43,12 @@ import {
   isSwapAssetAllowed,
   toConfigChainId,
 } from "../../core/config/swap-asset-availability";
+import { configAssetSeeds } from "../../core/config/config-asset-seeds";
 import {
   useBridgeAssetAllowlist,
   useSwapAssetAllowlist,
 } from "../hooks/useSwapAssetAllowlist";
+import { useRuntimeConfigSnapshot } from "../hooks/useRuntimeChains";
 import { BridgePage } from "./BridgePage";
 import "./SwapPage.css";
 
@@ -187,6 +189,7 @@ export function SolanaSwapPage({
   // null → no gating (offline / fallback / seed config), lists behave exactly
   // as before. A same-chain (Solana) pick executes as a swap → swap toggle; a
   // cross-chain pick executes as a bridge → bridge toggle.
+  const runtimeConfig = useRuntimeConfigSnapshot();
   const swapAllowlist = useSwapAssetAllowlist();
   const bridgeAllowlist = useBridgeAssetAllowlist();
   const isPickerTokenAllowed = useMemo(
@@ -288,8 +291,26 @@ export function SolanaSwapPage({
         });
       }
 
+      // Stage 3b: admin-enabled Solana config assets are selectable even at
+      // zero balance — the admin catalog is a token source, not only a
+      // filter. (The native-SOL seed dedupes via the shared wSOL mint.)
+      for (const s of configAssetSeeds(runtimeConfig, [LIFI_SOLANA_CHAIN_ID])) {
+        if (list.some((t) => t.mint === s.address)) continue;
+        list.push({
+          id: `spl:${selectedChainId}:${s.address}`,
+          symbol: s.symbol,
+          name: s.name,
+          balance: "0",
+          balanceRaw: "0",
+          decimals: s.decimals,
+          isNative: false,
+          mint: s.address,
+          logoUrl: s.logoUrl,
+        });
+      }
+
       // Stage 3: only admin-allowed assets are offered for swapping (the
-      // SOL/USDC seeds obey the allowlist too).
+      // SOL/USDC and config seeds obey the allowlist too).
       list = list.filter((token) =>
         isSwapAssetAllowed(swapAllowlist, {
           chainId: selectedChainId,
@@ -361,7 +382,7 @@ export function SolanaSwapPage({
     return () => {
       active = false;
     };
-  }, [selectedChainId, config, initialToAsset, swapAllowlist]);
+  }, [selectedChainId, config, initialToAsset, swapAllowlist, runtimeConfig]);
 
   // Stage 3: re-validate the current picks when the allowlist narrows — the
   // list effect above preserves an existing selection (cur ?? from), so a

@@ -29,6 +29,7 @@ import {
   buildSwapAllowlist,
   isSwapAssetAllowed,
 } from "../src/core/config/swap-asset-availability";
+import { configAssetSeeds } from "../src/core/config/config-asset-seeds";
 import {
   BASE_CHAIN_ID,
   DEFAULT_CHAINS,
@@ -440,6 +441,33 @@ check(
       address: USDC_BASE,
       isNative: false,
     }),
+);
+
+// ── Stage 3b: config assets as picker seeds ──
+const PICKER_CHAINS = [1, 56, BASE_CHAIN_ID, LIFI_SOLANA_CHAIN_ID, TRON_MAINNET_CHAIN_ID];
+const seeds = configAssetSeeds(swapServer, PICKER_CHAINS);
+check("fallback config yields no seeds", configAssetSeeds(fallback, PICKER_CHAINS).length === 0);
+check(
+  "native SOL seeds as the wSOL mint on the LI.FI Solana chain id",
+  seeds.some((s) => s.chainId === LIFI_SOLANA_CHAIN_ID && s.address === LIFI_SOLANA_NATIVE_MINT),
+);
+check(
+  "native TRX seeds as LI.FI's base58 sentinel",
+  seeds.some((s) => s.chainId === TRON_MAINNET_CHAIN_ID && s.address === LIFI_TRON_NATIVE_ADDRESS),
+);
+check(
+  "EVM native seeds as the zero address with isNative=true",
+  seeds.some((s) => s.chainId === BASE_CHAIN_ID && s.isNative && s.address.startsWith("0x000000")),
+);
+check(
+  "chains outside the supported picker set are never seeded",
+  configAssetSeeds(swapServer, [1]).every((s) => s.chainId === 1),
+);
+check(
+  "every seed passes its own feature allowlist",
+  seeds
+    .filter((s) => isSwapAssetAllowed(buildSwapAllowlist(swapServer), s) === false)
+    .every((s) => isSwapAssetAllowed(buildBridgeAllowlist(swapServer), s)),
 );
 
 console.log("");

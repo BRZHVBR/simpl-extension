@@ -53,10 +53,12 @@ import {
   isSwapAssetAllowed,
   toConfigChainId,
 } from "../../core/config/swap-asset-availability";
+import { configAssetSeeds } from "../../core/config/config-asset-seeds";
 import {
   useBridgeAssetAllowlist,
   useSwapAssetAllowlist,
 } from "../hooks/useSwapAssetAllowlist";
+import { useRuntimeConfigSnapshot } from "../hooks/useRuntimeChains";
 import "./SwapPage.css";
 
 type SwapPageProps = {
@@ -1478,6 +1480,28 @@ export function SwapPage({
     return getRegisteredTokensByChainId(selectedChainId);
   }, [selectedChainId]);
 
+  // Stage 3b: admin-enabled config assets on the current chain augment the
+  // "Popular" section — the admin catalog is a token source, not only a
+  // filter, so an enabled token is offerable even when the local registry
+  // lacks it. (SwapPage's same-chain picker is EVM-only, so the registry and
+  // picker chain-id spaces coincide.)
+  const runtimeConfig = useRuntimeConfigSnapshot();
+  const popularTokensForChain = useMemo(() => {
+    const known = new Set(registeredTokensForChain.map((r) => r.address.toLowerCase()));
+    const extra = configAssetSeeds(runtimeConfig, [selectedChainId])
+      .filter((s) => !s.isNative && !known.has(s.address.toLowerCase()))
+      .map(
+        (s): RegisteredToken => ({
+          chainId: selectedChainId,
+          address: s.address as `0x${string}`,
+          symbol: s.symbol,
+          name: s.name,
+          decimals: s.decimals,
+        }),
+      );
+    return [...registeredTokensForChain, ...extra];
+  }, [registeredTokensForChain, runtimeConfig, selectedChainId]);
+
   // Computed picker sections (wallet, popular, imported) filtered by search
   const { pickerWallet, pickerPopular, pickerImported } = useMemo(() => {
     const searchLower = tokenPickerSearch.toLowerCase().trim();
@@ -1503,7 +1527,7 @@ export function SwapPage({
 
     return {
       pickerWallet: allowedTokens.filter((t) => matchesSearch(t.name, t.symbol, t.address)),
-      pickerPopular: registeredTokensForChain
+      pickerPopular: popularTokensForChain
         .filter(
           (r) =>
             !walletAddresses.has(r.address.toLowerCase()) &&
@@ -1520,7 +1544,7 @@ export function SwapPage({
         )
         .map(customToSwapToken),
     };
-  }, [tokenPickerSearch, tokens, allowedTokens, registeredTokensForChain, importedCustomTokens, swapAllowlist, selectedChainId]);
+  }, [tokenPickerSearch, tokens, allowedTokens, popularTokensForChain, importedCustomTokens, swapAllowlist, selectedChainId]);
 
   const pickerHasNoResults =
     pickerWallet.length === 0 && pickerPopular.length === 0 && pickerImported.length === 0;
